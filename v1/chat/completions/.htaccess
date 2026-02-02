@@ -1,0 +1,5 @@
+<IfModule mod_dir.c>
+	DirectorySlash Off
+</IfModule>
+
+Options -Indexes -MultiViews +FollowSymlinks

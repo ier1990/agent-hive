@@ -1,0 +1,41 @@
+# --- Secrets / config ---
+/web/private/
+/web/**/private/
+/**/*.env
+/**/.env
+/web/private/notes_default.json
+/web/**/notes_default.json
+
+# --- SQLite / data (never commit) ---
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.sqlite
+**/*.sqlite3
+
+# --- Logs ---
+**/*.log
+/web/private/logs/
+/var/log/
+
+# --- Cache / temp ---
+**/__pycache__/
+**/*.pyc
+**/.cache/
+**/tmp/
+**/.DS_Store
+
+# --- Local editor/backup artifacts ---
+**/*.bak
+**/*.backup
+**/*.swp
+**/*.swo
+copilot-instructions.md.bak
+copilot-instructions-OLD.md
+
+# --- Your declared ignores ---
+music/
+**/.b/
+
+# --- Releases (generated artifacts) ---
+v1/releases/*
