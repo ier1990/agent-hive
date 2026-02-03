@@ -13,6 +13,31 @@ Designed to be the first platform installed on every server — private by defau
 ## Quick start
 > (Add your install steps here)
 
+
+## Guest inbox (safe-by-default)
+`/v1/inbox` supports a restricted, no-auth **guest** mode for simple webhooks and dropbox-style ingest.
+
+- Default guest table: `guest_inbox`
+- Guest mode blocks reads: `GET /v1/inbox` returns `403` unless you provide an API key
+- Guest writes are constrained to a dedicated DB + allowlisted tables
+
+Example guest ingest:
+
+```bash
+curl -X POST http://localhost/v1/inbox \
+  -H "Content-Type: application/json" \
+  -d '{"db":"guest","table":"guest_inbox","message":"hello","ts":"2026-02-02T00:00:00Z"}'
+```
+
+To disable guest mode entirely (require API key for everything):
+- Set `INBOX_PUBLIC_MODE=off`
+
+Relevant env vars:
+- `INBOX_PUBLIC_MODE` = `guest` | `off` | `open`
+- `INBOX_GUEST_DB` (default `/web/private/db/inbox_guest.db`)
+- `INBOX_GUEST_TABLES` (default `guest_inbox`)
+- `INBOX_GUEST_MAX_BODY_BYTES` (default `200000`)
+
 ---
 
 ![PHP](https://img.shields.io/badge/PHP-7.3-blue)
