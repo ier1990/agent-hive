@@ -37,6 +37,9 @@ copilot-instructions-OLD.md
 music/
 **/.b/
 
+# --- Local admin overlay (never commit) ---
+/.admin/
+
 # --- Releases (generated artifacts) ---
 v1/releases/*
 

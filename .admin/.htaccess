@@ -1,9 +1,0 @@
-AuthType Basic
-AuthName "IER Admin"
-AuthUserFile /web/private/.passwords/.htpassword
-
-# Require a valid user from the htpasswd file
-Require valid-user
-
-# Optional hardening (LAN only). Uncomment if you want.
-# Require ip 192.168.0.0/24
