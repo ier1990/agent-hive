@@ -1,14 +1,28 @@
+# AgentHive
 
-# Domain Memory
+AgentHive is a self-hosted ops memory + AI backend: job queues, admin tools, notes/search, and API endpoints.
+Designed to be the first platform installed on every server — private by default, with optional public APIs.
+
+## What you can do with it
+- Scan and modernize legacy codebases (e.g., older PHP projects)
+- Run queued AI jobs (workers, logs, retries)
+- Manage shared AI connections (OpenAI / Ollama / LM Studio)
+- Store and search operational notes and history
+- Expose safe endpoints for automation and agent-to-agent workflows
+
+## Quick start
+> (Add your install steps here)
+
+---
 
 ![PHP](https://img.shields.io/badge/PHP-7.3-blue)
 ![SQLite](https://img.shields.io/badge/DB-SQLite-lightgrey)
 ![LAN First](https://img.shields.io/badge/Network-LAN--First-green)
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 
-Domain Memory is for small teams who want AI assistance without sending their data to the cloud.
+AgentHive is for small teams who want AI assistance without sending their data to the cloud.
 
-Domain Memory is not “just notes” or “just an API”.
+AgentHive is not “just notes” or “just an API”.
 
 It’s a **machine memory layer** with **time-aware search history** feeding **AI enrichment**, under a stable `/v1/*` API contract.
 
@@ -280,7 +294,7 @@ Example layout:
 /web/notes         -> Human + AI notes
 /web/codewalker    -> Self-analysis & refactor
 /web/files         -> File browser
-/web/memory        -> Domain Memory DBs
+/web/memory        -> AgentHive DBs
 ```
 
 4) **Private domain memory**

@@ -39,3 +39,9 @@ music/
 
 # --- Releases (generated artifacts) ---
 v1/releases/*
+
+# --- Public repo safety ---
+**/.htpasswd
+**/.htpasswd.*
+**/api_keys.json
+**/*.pos
