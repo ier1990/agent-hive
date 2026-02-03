@@ -61,13 +61,77 @@ $reqId = bin2hex(random_bytes(16));  // 32-char receipt
 $clientIp = function_exists('get_client_ip_trusted') ? get_client_ip_trusted() : ($_SERVER['REMOTE_ADDR'] ?? '');
 $ua = $_SERVER['HTTP_USER_AGENT'] ?? null;
 
+// ---------- Public/guest boundaries ----------
+// If no API key is provided, treat caller as a guest and restrict:
+// - No reads (GET)
+// - Writes go to a dedicated guest DB, with allowlisted tables
+// - Smaller payload cap
+$clientKey = (string)($GLOBALS['APP_CLIENT_KEY'] ?? (function_exists('get_client_key') ? get_client_key() : ''));
+$isAuthed = ($clientKey !== '');
+
+// INBOX_PUBLIC_MODE:
+// - guest (default): allow limited POST-only guest inbox
+// - off: require an API key for all inbox use
+// - open: legacy behavior (no auth boundaries)
+$publicMode = strtolower((string)(function_exists('env') ? env('INBOX_PUBLIC_MODE', 'guest') : 'guest'));
+if (!in_array($publicMode, ['guest', 'off', 'open'], true)) $publicMode = 'guest';
+
+$guestDbPath = (string)(function_exists('env') ? env('INBOX_GUEST_DB', '/web/private/db/inbox_guest.db') : '/web/private/db/inbox_guest.db');
+$guestTablesRaw = (string)(function_exists('env') ? env('INBOX_GUEST_TABLES', 'guest_inbox') : 'guest_inbox');
+$guestTableAllow = [];
+foreach (explode(',', $guestTablesRaw) as $t) {
+  $t = sanitize_identifier(trim($t));
+  if ($t !== '') $guestTableAllow[$t] = true;
+}
+if (empty($guestTableAllow)) $guestTableAllow['guest_inbox'] = true;
+
+$guestMaxBodyBytes = (int)(function_exists('env') ? env('INBOX_GUEST_MAX_BODY_BYTES', 200000) : 200000);
+if ($guestMaxBodyBytes < 1024) $guestMaxBodyBytes = 1024;
+if ($guestMaxBodyBytes > MAX_BODY_BYTES) $guestMaxBodyBytes = MAX_BODY_BYTES;
+
 try {
   $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+  // Hard off: require a key for anything (OPTIONS already handled).
+  if (!$isAuthed && $publicMode === 'off') {
+    http_response_code(401);
+    echo json_encode([
+      'ok' => false,
+      'error' => 'unauthorized',
+      'endpoint' => 'v1/inbox',
+      'req_id' => $reqId,
+      'message' => 'API key required for inbox.'
+    ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+    exit;
+  }
 
   // -------------------------
   // GET: query inbox tables
   // -------------------------
   if ($method === 'GET') {
+    // Guest mode: do not allow reading inbox contents without a key.
+    if (!$isAuthed && $publicMode === 'guest') {
+      if (isset($_GET['ping'])) {
+        echo json_encode([
+          'ok' => true,
+          'endpoint' => 'v1/inbox',
+          'mode' => 'ping',
+          'auth' => 'guest',
+          'req_id' => $reqId,
+        ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+        exit;
+      }
+      http_response_code(403);
+      echo json_encode([
+        'ok' => false,
+        'error' => 'forbidden',
+        'reason' => 'guest_read_disabled',
+        'endpoint' => 'v1/inbox',
+        'req_id' => $reqId,
+      ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+      exit;
+    }
+
     // Query params:
     //   db (or service), table, limit, offset, order, desc, q, f_<col>=value
     $dbParam   = isset($_GET['db']) ? (string)$_GET['db'] : (isset($_GET['service']) ? (string)$_GET['service'] : '');
@@ -100,7 +164,7 @@ try {
         'ok' => false,
         'error' => 'table_not_found',
         'req_id' => $reqId,
-        'db' => $dbPath,
+        'db' => basename($dbPath),
         'table' => $table
       ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
       exit;
@@ -162,7 +226,7 @@ try {
       'endpoint' => 'v1/inbox',
       'mode'     => 'query',
       'req_id'   => $reqId,
-      'db'       => $dbPath,
+      'db'       => basename($dbPath),
       'table'    => $table,
       'limit'    => $limit,
       'offset'   => $offset,
@@ -206,12 +270,13 @@ try {
   }
 
   if ($raw === false) $raw = '';
-  if (strlen($raw) > MAX_BODY_BYTES) {
+  $maxBodyBytes = (!$isAuthed && $publicMode === 'guest') ? $guestMaxBodyBytes : MAX_BODY_BYTES;
+  if (strlen($raw) > $maxBodyBytes) {
     http_response_code(413);
     echo json_encode([
       'ok' => false,
       'error' => 'payload_too_large',
-      'limit' => MAX_BODY_BYTES,
+      'limit' => $maxBodyBytes,
       'req_id' => $reqId
     ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
     exit;
@@ -235,6 +300,23 @@ try {
   if ($table === '') $table = 'generic_input';
 
   $dbPath = getDatabasePath($data); // uses db/service
+
+  // Guest boundary: force all unauthenticated writes into a dedicated DB and
+  // restrict tables to an allowlist.
+  if (!$isAuthed && $publicMode === 'guest') {
+    if (!isset($guestTableAllow[$table])) {
+      http_response_code(403);
+      echo json_encode([
+        'ok' => false,
+        'error' => 'forbidden',
+        'reason' => 'guest_table_not_allowed',
+        'req_id' => $reqId,
+        'table' => $table,
+      ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+      exit;
+    }
+    $dbPath = $guestDbPath;
+  }
   ensure_db_dir($dbPath);
 
   // SQLite connect
@@ -316,7 +398,6 @@ try {
     'mode'         => 'ingest',
     'req_id'       => $reqId,
     'db'           => basename($dbPath),
-    'db_path'      => $dbPath,
     'table'        => $table,
     'insert_id'    => $insertedId,
     'table_created'=> (bool)$tableCreated,
