@@ -3,16 +3,35 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/lib/codewalker_runner.php';
+// Load core bootstrap for env() and other helpers
+$bootstrap = __DIR__ . '/../lib/bootstrap.php';
+if (!is_file($bootstrap)) {
+    $bootstrap = '/web/html/lib/bootstrap.php';
+}
+require_once $bootstrap;
+
+$runner = __DIR__ . '/lib/codewalker_runner.php';
+if (!is_file($runner)) {
+    $runner = '/web/html/admin/lib/codewalker_runner.php';
+}
+require_once $runner;
 
 function cw_cli_usage(): void
 {
     $msg = "CodeWalker CLI (PHP)\n\n"
         . "Usage:\n"
         . "  php admin/codewalker_cli.php --action=summarize /abs/path/to/file.php\n"
-        . "  php admin/codewalker_cli.php --action=rewrite /abs/path/to/file.php\n\n"
+        . "  php admin/codewalker_cli.php --action=auto /abs/path/to/file.php\n\n"
         . "Options:\n"
-        . "  --action=auto|summarize|rewrite   Default: summarize\n"
+        . "  --action=auto|summarize|rewrite|audit|test|docs|refactor   Default: summarize\n"
+        . "\nActions:\n"
+        . "  summarize  - Generate code summary\n"
+        . "  rewrite    - Refactor code with diffs\n"
+        . "  audit      - Security/vulnerability analysis\n"
+        . "  test       - Test coverage & strategy\n"
+        . "  docs       - Generate documentation\n"
+        . "  refactor   - Refactoring suggestions\n"
+        . "  auto       - Pick random action based on percentages\n"
         . "\nNotes:\n"
         . "  - Reads config + prompts from /web/private/db/codewalker_settings.db\n"
         . "  - Writes results into the configured codewalker.db (db_path setting)\n";
@@ -36,9 +55,59 @@ foreach ($argv as $i => $a) {
     $paths[] = $a;
 }
 
+// If no paths provided, auto-scan from config
 if (!$paths) {
-    cw_cli_usage();
-    exit(2);
+    $cfg = cw_settings_get_all();
+    $scanPath = rtrim((string)($cfg['scan_path'] ?? ''), '/');
+    $fileTypes = (array)($cfg['file_types'] ?? ['php', 'py', 'sh', 'log']);
+    $excludeDirs = (array)($cfg['exclude_dirs'] ?? []);
+    $limit = (int)($cfg['limit_per_run'] ?? 5);
+    
+    if ($scanPath === '' || !is_dir($scanPath)) {
+        fwrite(STDERR, "No scan_path configured or not a directory: $scanPath\n");
+        exit(2);
+    }
+    
+    fwrite(STDOUT, "Auto-scanning: $scanPath (limit: $limit, types: " . implode(',', $fileTypes) . ")\n");
+    
+    // Collect all matching files (not just first N)
+    $candidates = [];
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($scanPath, RecursiveDirectoryIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::SELF_FIRST
+    );
+    
+    foreach ($iterator as $file) {
+        if (!$file->isFile()) continue;
+        $path = $file->getPathname();
+        
+        // Check excludes
+        $skip = false;
+        foreach ($excludeDirs as $excl) {
+            $excl = trim((string)$excl, '/');
+            if ($excl !== '' && strpos($path, '/' . $excl . '/') !== false) {
+                $skip = true;
+                break;
+            }
+        }
+        if ($skip) continue;
+        
+        // Check file type
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if (!in_array($ext, $fileTypes, true)) continue;
+        
+        $candidates[] = $path;
+    }
+    
+    if (empty($candidates)) {
+        fwrite(STDOUT, "No files found to process.\n");
+        exit(0);
+    }
+    
+    // Randomize and take first N (this gives different files each run)
+    shuffle($candidates);
+    $paths = array_slice($candidates, 0, $limit);
+    fwrite(STDOUT, "Found " . count($paths) . " files to process\n");
 }
 
 $exit = 0;
@@ -48,7 +117,11 @@ foreach ($paths as $p) {
         $aid = isset($res['action_id']) ? (int)$res['action_id'] : 0;
         $st = isset($res['status']) ? (string)$res['status'] : 'unknown';
         $err = isset($res['error']) ? (string)$res['error'] : '';
-        if ($st !== 'ok') {
+        
+        if ($st === 'skip') {
+            // Skipped file (already processed) - not an error, just informational
+            fwrite(STDOUT, "[skip] $p\n");
+        } elseif ($st !== 'ok') {
             $exit = 1;
             fwrite(STDERR, "[$st] $p (action_id=$aid) $err\n");
         } else {

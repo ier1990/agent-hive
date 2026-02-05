@@ -467,28 +467,75 @@ elseif ($view === 'action') {
         echo '<div class="kv"><div>Model</div><div>'.h(($a['backend']?:'').'/'.($a['model']?:'')).'</div></div>';
         echo '<div class="kv"><div>When</div><div>'.h($a['created_at']).'</div></div>';
         echo '<details style="margin-top:.5rem"><summary>Prompt</summary><pre>'.h($a['prompt']).'</pre></details>';
-        if ($a['action']==='summarize' || $a['action']==='create_prompt_from_code') {
+        
+        // Handle different action types
+        $action_type = (string)$a['action'];
+        
+        if ($action_type === 'summarize' || $action_type === 'create_prompt_from_code') {
             $s = $pdo->prepare('SELECT summary FROM summaries WHERE action_id=?'); $s->execute([$id]); $row=$s->fetch();
-            //echo '<h4>Summary</h4><pre>'.h($row['summary'] ?? '(none)').'</pre>';
-
-
-//Dsiplay Markdown summary
-        if (!$row) { echo '<p>No summary stored.</p>'; }
-        else {
-            $rawSummary = (string)$row['summary'];
-            $mdSummary = cw_summary_to_markdown($rawSummary);
-
-            echo '<h4>'.($a['action']==='create_prompt_from_code' ? 'Generated Prompt' : 'Summary').'</h4>';
-            echo '<div class="markdown-content" id="summary-'.h((string)$id).'"></div>';
-
-            echo '<details style="margin-top:1rem"><summary>Raw Stored Summary</summary><pre>'.h($rawSummary).'</pre></details>';
-            echo '<script>
-            document.getElementById("summary-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($mdSummary) . ');
-            </script>';
-        }
-
-            
-        } else {
+            if (!$row) { echo '<p>No summary stored.</p>'; }
+            else {
+                $rawSummary = (string)$row['summary'];
+                $mdSummary = cw_summary_to_markdown($rawSummary);
+                echo '<h4>'.($action_type==='create_prompt_from_code' ? 'Generated Prompt' : 'Summary').'</h4>';
+                echo '<div class="markdown-content" id="summary-'.h((string)$id).'"></div>';
+                echo '<details style="margin-top:1rem"><summary>Raw Stored Summary</summary><pre>'.h($rawSummary).'</pre></details>';
+                echo '<script>
+                document.getElementById("summary-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($mdSummary) . ');
+                </script>';
+            }
+        } elseif ($action_type === 'audit') {
+            $s = $pdo->prepare('SELECT findings FROM audits WHERE action_id=?'); $s->execute([$id]); $row=$s->fetch();
+            if (!$row) { echo '<p>No audit stored.</p>'; }
+            else {
+                $rawAudit = (string)$row['findings'];
+                $mdAudit = cw_summary_to_markdown($rawAudit);
+                echo '<h4>Security Audit</h4>';
+                echo '<div class="markdown-content" id="audit-'.h((string)$id).'"></div>';
+                echo '<details style="margin-top:1rem"><summary>Raw Audit Data</summary><pre>'.h($rawAudit).'</pre></details>';
+                echo '<script>
+                document.getElementById("audit-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($mdAudit) . ');
+                </script>';
+            }
+        } elseif ($action_type === 'test') {
+            $s = $pdo->prepare('SELECT strategy FROM tests WHERE action_id=?'); $s->execute([$id]); $row=$s->fetch();
+            if (!$row) { echo '<p>No test strategy stored.</p>'; }
+            else {
+                $rawTest = (string)$row['strategy'];
+                $mdTest = cw_summary_to_markdown($rawTest);
+                echo '<h4>Test Strategy</h4>';
+                echo '<div class="markdown-content" id="test-'.h((string)$id).'"></div>';
+                echo '<details style="margin-top:1rem"><summary>Raw Test Data</summary><pre>'.h($rawTest).'</pre></details>';
+                echo '<script>
+                document.getElementById("test-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($mdTest) . ');
+                </script>';
+            }
+        } elseif ($action_type === 'docs') {
+            $s = $pdo->prepare('SELECT documentation FROM docs WHERE action_id=?'); $s->execute([$id]); $row=$s->fetch();
+            if (!$row) { echo '<p>No documentation stored.</p>'; }
+            else {
+                $rawDocs = (string)$row['documentation'];
+                echo '<h4>Documentation</h4>';
+                echo '<div class="markdown-content" id="docs-'.h((string)$id).'"></div>';
+                echo '<details style="margin-top:1rem"><summary>Raw Documentation</summary><pre>'.h($rawDocs).'</pre></details>';
+                echo '<script>
+                document.getElementById("docs-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($rawDocs) . ');
+                </script>';
+            }
+        } elseif ($action_type === 'refactor') {
+            $s = $pdo->prepare('SELECT suggestions FROM refactors WHERE action_id=?'); $s->execute([$id]); $row=$s->fetch();
+            if (!$row) { echo '<p>No refactor suggestions stored.</p>'; }
+            else {
+                $rawRefactor = (string)$row['suggestions'];
+                $mdRefactor = cw_summary_to_markdown($rawRefactor);
+                echo '<h4>Refactoring Suggestions</h4>';
+                echo '<div class="markdown-content" id="refactor-'.h((string)$id).'"></div>';
+                echo '<details style="margin-top:1rem"><summary>Raw Refactor Data</summary><pre>'.h($rawRefactor).'</pre></details>';
+                echo '<script>
+                document.getElementById("refactor-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($mdRefactor) . ');
+                </script>';
+            }
+        } elseif ($action_type === 'rewrite') {
             $r = $pdo->prepare('SELECT rewrite,diff FROM rewrites WHERE action_id=?'); $r->execute([$id]); $rw=$r->fetch();
             if (!$rw) { echo '<p>No rewrite stored.</p>'; }
             else {
@@ -512,14 +559,18 @@ elseif ($view === 'action') {
                 echo '<label><input type="checkbox" name="force" value="1"> Force apply even if hash changed</label><br>';
                 echo '<div style="margin-top:.5rem"><button class="btn good" type="submit" '.($applied?'disabled':'').'>Apply now</button></div>';
                 echo '</form>';
-                echo '<form method="post" onsubmit="return confirm(\'Delete this action record?\')" style="margin-top:.5rem">';
-                echo '<input type="hidden" name="csrf" value="'.h($csrf).'">';
-                echo '<input type="hidden" name="op" value="delete_action">';
-                echo '<input type="hidden" name="id" value="'.(int)$a['id'].'">';
-                echo '<button class="btn bad" type="submit">Delete action</button>';
-                echo '</form>';
             }
+        } else {
+            // Unknown action type
+            echo '<p>Unknown action type: '.h($action_type).'</p>';
         }
+        // Always allow delete from action view (including error/summarize)
+        echo '<form method="post" onsubmit="return confirm(\'Delete this action record?\')" style="margin-top:.75rem">';
+        echo '<input type="hidden" name="csrf" value="'.h($csrf).'">';
+        echo '<input type="hidden" name="op" value="delete_action">';
+        echo '<input type="hidden" name="id" value="'.(int)$a['id'].'">';
+        echo '<button class="btn bad" type="submit">Delete action</button>';
+        echo '</form>';
         echo '</div>';
     }
 }
@@ -540,6 +591,10 @@ elseif ($view === 'file') {
         echo '<input type="hidden" name="path" value="'.h($path).'">';
         echo '<button class="btn" type="submit" name="action" value="summarize">📝 Summarize</button>';
         echo '<button class="btn warn" type="submit" name="action" value="rewrite">✏ Rewrite</button>';
+        echo '<button class="btn" type="submit" name="action" value="audit">🔒 Audit</button>';
+        echo '<button class="btn" type="submit" name="action" value="test">🧪 Test</button>';
+        echo '<button class="btn" type="submit" name="action" value="docs">📚 Docs</button>';
+        echo '<button class="btn" type="submit" name="action" value="refactor">🔧 Refactor</button>';
         echo '</form>';
         echo '</div>';
 

@@ -1,17 +1,8 @@
 <?php
-// CodeWalker settings editor (SQLite settings DB)
+// Redirect to codew_config.php (unified CodeWalker settings editor)
+header('Location: codew_config.php');
+exit;
 
-declare(strict_types=1);
-
-require_once __DIR__ . '/../lib/bootstrap.php';
-require_once APP_LIB . '/auth/auth.php';
-auth_require_admin();
-
-require_once __DIR__ . '/lib/codewalker_helpers.php';
-require_once __DIR__ . '/lib/codewalker_settings.php';
-
-$ADMIN_PASS = getenv('CODEWALKER_ADMIN_PASS') ?: '';
-login_required($ADMIN_PASS);
 
 $errors = [];
 $flash = '';

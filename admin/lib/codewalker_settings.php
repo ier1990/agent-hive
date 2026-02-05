@@ -18,10 +18,10 @@ function cw_config_template(): array
         'scan_path' => '/web',
         'write_root' => '/web',
         'file_types' => ['php', 'py', 'sh', 'log'],
-        'actions' => ['summarize', 'rewrite'],
+        'actions' => ['summarize', 'rewrite', 'audit', 'test', 'docs', 'refactor'],
         'rewrite_prompt' => 'Make this code more readable and modular.',
         'deterministic_per_file' => false,
-        'db_path' => '/web/private/db/memory/codewalker.db',
+        'db_path' => '/web/private/db/inbox/codewalker.db',
         'log_path' => '/web/private/logs/codewalker.log',
         'exclude_dirs' => [
             '.git', 'vendor', 'node_modules', 'storage', 'cache', 'tmp', 'uploads', 'images', 'assets',
@@ -30,11 +30,16 @@ function cw_config_template(): array
         'max_filesize_kb' => 512,
         'log_tail_lines' => 1200,
         'backend' => 'ollama',
-            'base_url' => 'http://127.0.0.1:11434',
+        'base_url' => 'http://127.0.0.1:11434',
         'api_key' => null,
         'model' => 'gpt-oss:latest',
         'model_timeout_seconds' => 900,
-        'percent_rewrite' => 50,
+        'use_active_ai' => false,
+        'percent_rewrite' => 40,
+        'percent_audit' => 15,
+        'percent_test' => 15,
+        'percent_docs' => 15,
+        'percent_refactor' => 15,
         'limit_per_run' => 5,
         'lockfile' => '/tmp/codewalker.lock',
         'respect_gitignore' => true,
@@ -42,6 +47,10 @@ function cw_config_template(): array
         // Prompt templates (stored in the same settings DB)
         'prompt_rewrite_template' => 'rewrite',
         'prompt_summarize_template' => 'summarize',
+        'prompt_audit_template' => 'audit',
+        'prompt_test_template' => 'test',
+        'prompt_docs_template' => 'docs',
+        'prompt_refactor_template' => 'refactor',
     ];
 }
 
@@ -67,6 +76,51 @@ function cw_prompt_template_defaults(): array
                 . "Focus on purpose, key functions, inputs/outputs, dependencies, side effects, security or performance risks, and immediate TODOs. "
                 . "If it is a LOG, extract patterns, error types, and anomalies from the given tail. Return *valid JSON only* with keys: "
                 . "{file_purpose, key_functions, inputs_outputs, dependencies, side_effects, risks, todos, test_ideas}."
+            ),
+            'is_default' => 1,
+        ],
+        'audit' => [
+            'name' => 'audit',
+            'description' => 'Security and vulnerability analysis',
+            'content' => (
+                "You are a security auditor analyzing code for vulnerabilities, unsafe practices, and compliance issues. "
+                . "Read the file carefully and produce a JSON report. Focus on: SQL injection risks, command injection, XSS vulnerabilities, authentication/authorization issues, "
+                . "hardcoded secrets, insecure dependencies, unsafe file operations, race conditions, and OWASP top issues. "
+                . "Return *valid JSON only* with keys: {file_path, risk_level, vulnerabilities[], unsafe_practices[], recommendations[], can_fix_automatically}. "
+                . "Rate each issue as LOW, MEDIUM, HIGH, or CRITICAL."
+            ),
+            'is_default' => 1,
+        ],
+        'test' => [
+            'name' => 'test',
+            'description' => 'Test coverage and testing strategy analysis',
+            'content' => (
+                "You are a testing strategist. Analyze this code and suggest a comprehensive test strategy. "
+                . "Identify functions/methods that should be tested, edge cases, error conditions, and integration points. "
+                . "Return *valid JSON only* with keys: {testable_units[], edge_cases[], test_scenarios[], integration_points[], coverage_gaps[], sample_test_cases[]}. "
+                . "For each test case, include: name, description, inputs, expected_output, edge_case_type."
+            ),
+            'is_default' => 1,
+        ],
+        'docs' => [
+            'name' => 'docs',
+            'description' => 'Generate documentation from code',
+            'content' => (
+                "You are a technical writer. Generate comprehensive documentation for this code. "
+                . "Create clear, concise documentation in Markdown format that includes: overview, function/method descriptions (with parameters, return values, exceptions), "
+                . "usage examples, dependencies, configuration options, and common pitfalls. "
+                . "Use headers, code fences, and lists for clarity. Output should be immediately usable as README or API docs."
+            ),
+            'is_default' => 1,
+        ],
+        'refactor' => [
+            'name' => 'refactor',
+            'description' => 'Refactoring suggestions (non-breaking improvements)',
+            'content' => (
+                "You are a code improvement specialist. Analyze this code and suggest refactoring improvements that preserve behavior. "
+                . "Focus on: code duplication, naming clarity, reducing complexity, performance quick wins, and readability. "
+                . "Return *valid JSON only* with keys: {suggestions[], refactoring_priorities[], breaking_changes_risk[], estimated_effort[]}. "
+                . "For each suggestion, include: title, reason, impact (LOW/MEDIUM/HIGH), code_example, risk_level."
             ),
             'is_default' => 1,
         ],
@@ -209,6 +263,57 @@ function cw_settings_get_all(?string $dbPath = null): array
     $envDb = getenv('CODEWALKER_DB');
     if (is_string($envDb) && $envDb !== '') {
         $out['db_path'] = $envDb;
+    }
+
+    // Optionally follow the active AI connection (admin AI Setup)
+    $useActive = !empty($out['use_active_ai']);
+    if ($useActive) {
+        $aiBootstrap = __DIR__ . '/../../lib/ai_bootstrap.php';
+        if (is_file($aiBootstrap)) {
+            require_once $aiBootstrap;
+        }
+        if (function_exists('ai_settings_get') && function_exists('ai_base_without_v1')) {
+            try {
+                $active = ai_settings_get();
+                $provider = strtolower((string)($active['provider'] ?? ''));
+                $backend = 'openai_compat';
+                if ($provider === 'ollama') {
+                    $backend = 'ollama';
+                } elseif ($provider === 'local' || $provider === 'lmstudio') {
+                    $backend = 'lmstudio';
+                } elseif ($provider === 'openai' || $provider === 'openrouter' || $provider === 'anthropic' || $provider === 'custom') {
+                    $backend = 'openai_compat';
+                }
+
+                $base = (string)($active['base_url'] ?? '');
+                $base = ai_base_without_v1($base);
+                $apiKey = (string)($active['api_key'] ?? '');
+
+                // Only apply active settings if we have at least base_url and api_key (for auth-required providers)
+                if ($base !== '' && ($backend === 'lmstudio' || $backend === 'ollama' || $apiKey !== '')) {
+                    $out['base_url'] = $base;
+                    $out['backend'] = $backend;
+                    $out['api_key'] = $apiKey;
+                    if (!empty($active['model'])) {
+                        $out['model'] = (string)$active['model'];
+                    }
+                    if (!empty($active['timeout_seconds'])) {
+                        $out['model_timeout_seconds'] = (int)$active['timeout_seconds'];
+                    }
+                } else {
+                    // Active connection incomplete, fall back to hardcoded settings
+                    if ($base === '') {
+                        error_log('CodeWalker: Active AI connection missing base_url, using fallback');
+                    }
+                    if ($apiKey === '' && ($backend === 'openai_compat' || $backend === 'openrouter' || $backend === 'anthropic')) {
+                        error_log('CodeWalker: Active AI connection missing API key for ' . $backend . ', using fallback');
+                    }
+                }
+            } catch (Throwable $e) {
+                error_log('CodeWalker: Failed to load active AI connection: ' . $e->getMessage());
+                // Fall through to use hardcoded settings
+            }
+        }
     }
 
     return $out;

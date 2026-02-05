@@ -246,8 +246,10 @@ $rows = [
     ['mode', 'cron|que'],
     ['backend', 'auto|lmstudio|ollama|openai_compat'],
     ['base_url', 'LLM base URL (Ollama: http://host:11434)'],
+    ['api_key', 'API key for auth-required providers (OpenRouter, Anthropic, OpenAI)'],
     ['model', 'Default model name'],
     ['model_timeout_seconds', 'LLM request timeout in seconds (e.g. 900 for 15 minutes)'],
+    ['use_active_ai', 'Follow active AI connection from Admin AI Setup (ignores hardcoded base_url/api_key/model if enabled)'],
     ['percent_rewrite', '0-100 chance for rewrite'],
     ['limit_per_run', 'Max files per run'],
     ['max_filesize_kb', 'Max KB read for code'],
@@ -276,6 +278,8 @@ foreach ($rows as $row) {
         }
     } elseif ($k === 'prompt_rewrite_template' || $k === 'prompt_summarize_template') {
         echo field_template_select($k, $val, $promptTemplateNames);
+    } elseif ($k === 'use_active_ai' || $k === 'respect_gitignore') {
+        echo field_bool($k, $val);
     } elseif (is_array($val)) {
         echo field_json($k, $val);
     } elseif (is_bool($val)) {

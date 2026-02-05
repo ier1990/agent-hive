@@ -4,9 +4,10 @@ AgentHive is a self-hosted ops memory + AI backend: job queues, admin tools, not
 Designed to be the first platform installed on every server — private by default, with optional public APIs.
 
 ## What you can do with it
-- Scan and modernize legacy codebases (e.g., older PHP projects)
+- **Analyze and modernize codebases** with AI-powered CodeWalker (security audits, test strategies, documentation, refactoring)
+- Scan and understand legacy projects (older PHP, Python, shell scripts)
 - Run queued AI jobs (workers, logs, retries)
-- Manage shared AI connections (OpenAI / Ollama / LM Studio)
+- Manage shared AI connections (OpenAI / Anthropic / OpenRouter / Ollama / LM Studio)
 - Store and search operational notes and history
 - Expose safe endpoints for automation and agent-to-agent workflows
 
@@ -115,8 +116,55 @@ with:
 - **/v1 API** endpoints (JSON, key + scope auth, rate limited)
 - **Notes** web app at `/admin/notes/` (SQLite-backed, includes a small “Jobs” health view)
 - **Chat routing** at `/v1/chat/` (autoselector) and `/v1/chat/completions` (OpenAI-compatible shim)
-- **Admin tools** under `/admin/` (protected with a “bootstrap token” flow to avoid fresh-install lockouts)
+- **Admin tools** under `/admin/` (protected with a “bootstrap token” flow to avoid fresh-install lockouts)- **CodeWalker** — AI-powered codebase analysis and modernization tool
 
+### CodeWalker
+
+CodeWalker is an automated codebase analysis system that uses AI to understand, document, audit, test, and refactor your code.
+
+**Key Features:**
+- **Multi-Action Analysis**: 6 analysis types with configurable probability distribution
+  - 📝 **Summarize** — Generate structured code summaries
+  - ✏ **Rewrite** — Refactor code with unified diffs
+  - 🔒 **Audit** — Security and vulnerability analysis
+  - 🧪 **Test** — Test coverage and strategy recommendations
+  - 📚 **Docs** — Auto-generate documentation
+  - 🔧 **Refactor** — Architectural improvement suggestions
+  
+- **Smart Deduplication**: Hash-based file tracking prevents reprocessing unchanged files
+- **Randomized Scanning**: Processes different files each run for better codebase coverage
+- **Action Distribution**: Configure percentages (e.g., 40% rewrite, 15% audit, 15% test, 15% docs, 15% refactor)
+- **Web Dashboard**: View all analyses, apply rewrites, track progress at `/admin/codewalker.php`
+- **CLI + Cron**: Run manually or schedule automated scans
+- **Multi-Model Support**: Works with OpenAI, Anthropic, OpenRouter, Ollama, or local LM Studio
+
+**Quick Start:**
+```bash
+# Run on specific file
+php admin/codewalker_cli.php --action=audit /path/to/file.php
+
+# Auto-scan with random actions
+php admin/codewalker_cli.php --action=auto
+
+# View results
+open http://localhost/admin/codewalker.php?view=dashboard
+```
+
+**Configuration:**
+Edit settings at `/admin/codewalker.php?view=settings` or via the settings database. Configure:
+- Scan paths and file types
+- Action percentages and prompts
+- AI model selection
+- Exclusion patterns
+
+**Database:**
+- Settings: `/web/private/db/codewalker_settings.db`
+- Results: `/web/private/db/inbox/codewalker.db`
+
+**Cost Efficiency:**
+At ~$0.24 per 250 files (using efficient models), CodeWalker provides comprehensive codebase intelligence at scale.
+
+---
 It’s designed to run on a normal Linux box with Apache + PHP and a writable private data directory (default: `/web/private`).
 
 ---

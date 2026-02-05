@@ -69,7 +69,25 @@ function cw_cwdb_init(PDO $pdo): void
         rewrite TEXT,
         diff TEXT
     )');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS audits (
+        action_id INTEGER PRIMARY KEY,
+        findings TEXT
+    )');
 
+    $pdo->exec('CREATE TABLE IF NOT EXISTS tests (
+        action_id INTEGER PRIMARY KEY,
+        strategy TEXT
+    )');
+
+    $pdo->exec('CREATE TABLE IF NOT EXISTS docs (
+        action_id INTEGER PRIMARY KEY,
+        documentation TEXT
+    )');
+
+    $pdo->exec('CREATE TABLE IF NOT EXISTS refactors (
+        action_id INTEGER PRIMARY KEY,
+        suggestions TEXT
+    )');
     $pdo->exec('CREATE VIEW IF NOT EXISTS vw_last_actions AS
         SELECT a.*, f.path FROM actions a
         JOIN files f ON f.id = a.file_id
@@ -101,6 +119,85 @@ function cw_iso(): string
 {
     // Use UTC-ish ISO string.
     return gmdate('c');
+}
+
+// Create a fingerprint hash for deduplication (filename + filesize + model + action)
+function cw_file_fingerprint(string $path, string $model, string $action): string
+{
+    $filesize = @filesize($path);
+    if ($filesize === false) $filesize = 0;
+    $key = $path . '|' . (int)$filesize . '|' . $model . '|' . $action;
+    return hash('sha256', $key);
+}
+
+// Pick a random action based on configured percentages
+function cw_pick_random_action(array $cfg): string
+{
+    $percent_rewrite = (int)($cfg['percent_rewrite'] ?? 40);
+    $percent_audit = (int)($cfg['percent_audit'] ?? 15);
+    $percent_test = (int)($cfg['percent_test'] ?? 15);
+    $percent_docs = (int)($cfg['percent_docs'] ?? 15);
+    $percent_refactor = (int)($cfg['percent_refactor'] ?? 15);
+    
+    // Normalize to 100% (in case they don't add up)
+    $total = $percent_rewrite + $percent_audit + $percent_test + $percent_docs + $percent_refactor;
+    if ($total === 0) {
+        // Default fallback
+        return 'summarize';
+    }
+    
+    // Generate random number 0-99 and pick action based on ranges
+    $rand = random_int(0, 99);
+    $cumulative = 0;
+    
+    $cumulative += $percent_rewrite;
+    if ($rand < $cumulative) return 'rewrite';
+    
+    $cumulative += $percent_audit;
+    if ($rand < $cumulative) return 'audit';
+    
+    $cumulative += $percent_test;
+    if ($rand < $cumulative) return 'test';
+    
+    $cumulative += $percent_docs;
+    if ($rand < $cumulative) return 'docs';
+    
+    $cumulative += $percent_refactor;
+    if ($rand < $cumulative) return 'refactor';
+    
+    // Fallback
+    return 'summarize';
+}
+
+function cw_is_file_already_processed(PDO $pdo, string $path, string $model, string $action): bool
+{
+    $filesize = @filesize($path);
+    if ($filesize === false) $filesize = 0;
+    
+    $stmt = $pdo->prepare('SELECT COUNT(*) as cnt FROM actions a JOIN files f ON f.id = a.file_id 
+        WHERE f.path = ? AND a.model = ? AND a.action = ? AND a.status = ?');
+    $stmt->execute([$path, $model, strtolower($action), 'ok']);
+    $row = $stmt->fetch();
+    $count = (int)($row['cnt'] ?? 0);
+    
+    if ($count === 0) {
+        return false; // Not processed yet
+    }
+    
+    // Found a previous action - check if file has changed by comparing filesize or last_seen
+    $stmt = $pdo->prepare('SELECT MAX(a.created_at) as last_run FROM actions a JOIN files f ON f.id = a.file_id 
+        WHERE f.path = ? AND a.model = ? AND a.action = ? AND a.status = ? LIMIT 1');
+    $stmt->execute([$path, $model, strtolower($action), 'ok']);
+    $row = $stmt->fetch();
+    $lastRunTime = isset($row['last_run']) ? strtotime((string)$row['last_run']) : 0;
+    $lastModTime = (int)@filemtime($path);
+    
+    // If file was modified after last run, reprocess it
+    if ($lastModTime > $lastRunTime) {
+        return false;
+    }
+    
+    return true;
 }
 
 function cw_tail_lines(string $path, int $n): string
@@ -358,7 +455,13 @@ function cw_llm_chat(array $cfg, array $messages, ?string $modelOverride = null)
         $tryFns = ['lmstudio'];
     } elseif ($backend === 'ollama') {
         $tryFns = ['ollama'];
-    } elseif ($backend === 'openai_compat' || $backend === 'custom' || $backend === 'openai') {
+    } elseif (
+        $backend === 'openai_compat'
+        || $backend === 'custom'
+        || $backend === 'openai'
+        || $backend === 'openrouter'
+        || $backend === 'anthropic'
+    ) {
         $tryFns = ['openai_compat'];
     } else {
         throw new CWLLMError('Unknown backend: ' . $backend);
@@ -456,6 +559,11 @@ function cw_run_on_file(string $path, ?string $actionOverride = null): array
     $dbPath = isset($cfg['db_path']) ? (string)$cfg['db_path'] : '';
     if ($dbPath === '') throw new RuntimeException('Missing db_path');
 
+    // Debug logging for settings (especially when use_active_ai is enabled)
+    if (!empty($cfg['use_active_ai']) && php_sapi_name() === 'cli') {
+        error_log('[CodeWalker] use_active_ai=true, backend=' . ($cfg['backend'] ?? 'unknown') . ', base_url=' . ($cfg['base_url'] ?? 'unknown'));
+    }
+
     $scanRoot = isset($cfg['scan_path']) ? rtrim((string)$cfg['scan_path'], '/') : '';
     if ($scanRoot !== '' && !cw_starts_with($path, $scanRoot . '/')) {
         // Allow exact scan root file, too.
@@ -469,6 +577,38 @@ function cw_run_on_file(string $path, ?string $actionOverride = null): array
     $pdo = cw_cwdb_pdo($dbPath);
     cw_cwdb_init($pdo);
 
+    // Determine action early for deduplication check
+    $action = $actionOverride ? strtolower($actionOverride) : '';
+    if ($action === '' || $action === 'auto') {
+        [$payload, $ext] = cw_read_payload($path, $cfg);
+        // Summarize logs, pick random action for code
+        if ($ext === 'log') {
+            $action = 'summarize';
+        } else {
+            $action = cw_pick_random_action($cfg);
+        }
+    } else {
+        [$payload, $ext] = cw_read_payload($path, $cfg);
+    }
+    
+    // Validate action
+    $validActions = ['summarize', 'rewrite', 'audit', 'test', 'docs', 'refactor'];
+    if (!in_array($action, $validActions, true)) {
+        throw new RuntimeException('Invalid action: ' . $action);
+    }
+
+    $model = isset($cfg['model']) ? (string)$cfg['model'] : 'gpt-oss:latest';
+
+    // Check if already processed with same model/action (deduplication)
+    if (cw_is_file_already_processed($pdo, $path, $model, $action)) {
+        // Return a synthetic result indicating it was skipped
+        return [
+            'action_id' => 0,
+            'status' => 'skip',
+            'error' => 'Already processed',
+        ];
+    }
+
     $runId = cw_cwdb_insert_run($pdo, $cfg);
 
     $full = @file_get_contents($path);
@@ -477,22 +617,11 @@ function cw_run_on_file(string $path, ?string $actionOverride = null): array
     $hash = sha256_file_s($path) ?: '';
     if ($hash === '') throw new RuntimeException('Failed to hash file');
 
-    [$payload, $ext] = cw_read_payload($path, $cfg);
     if (trim((string)$payload) === '') throw new RuntimeException('Empty payload');
 
     $fileId = cw_cwdb_get_or_create_file($pdo, $path, $ext, $hash);
 
-    $action = $actionOverride ? strtolower($actionOverride) : '';
-    if ($action === '' || $action === 'auto') {
-        $action = ($ext === 'log') ? 'summarize' : 'summarize';
-    }
-    if ($action !== 'summarize' && $action !== 'rewrite') {
-        throw new RuntimeException('Invalid action: ' . $action);
-    }
-
     $fileMeta = "File: {$path}\nExt: {$ext}\nSize: " . (string)filesize($path) . " bytes\nLastModified: " . date('c', (int)filemtime($path)) . "\n";
-
-    $model = isset($cfg['model']) ? (string)$cfg['model'] : 'gpt-oss:latest';
 
     $status = 'ok';
     $err = null;
@@ -514,6 +643,12 @@ function cw_run_on_file(string $path, ?string $actionOverride = null): array
             if (isset($meta['usage']['completion_tokens'])) $tokensOut = (int)$meta['usage']['completion_tokens'];
 
             $summary = trim((string)$text);
+            
+            // Validate non-empty response
+            if ($summary === '') {
+                throw new RuntimeException('Empty response from AI model');
+            }
+            
             // validate JSON
             $tmp = json_decode($summary, true);
             if (json_last_error() !== JSON_ERROR_NONE) {
@@ -526,22 +661,27 @@ function cw_run_on_file(string $path, ?string $actionOverride = null): array
         }
 
         $actionId = cw_cwdb_insert_action($pdo, $runId, $fileId, 'summarize', $model, $backendUsed, $system, $hash, $status, $err, $tokensIn, $tokensOut);
-        if ($status === 'ok') {
+        if ($status === 'ok' && $summary !== '') {
             $pdo->prepare('INSERT OR REPLACE INTO summaries(action_id,summary) VALUES(?,?)')->execute([$actionId, $summary]);
         }
 
         return ['action_id' => $actionId, 'status' => $status, 'error' => $err];
     }
 
-    // rewrite
-    $system = cw_prompt_content($cfg, 'rewrite');
+    // Handle other action types (rewrite, audit, test, docs, refactor)
+    $promptKey = 'prompt_' . $action . '_template';
+    $defaultPromptName = $action;
+    $system = cw_prompt_content($cfg, $defaultPromptName);
+    
     $messages = [
         ['role' => 'system', 'content' => $system],
-        ['role' => 'user', 'content' => $fileMeta . "\nRewrite the entire file below.\n```{$ext}\n" . str_replace('```', '``\\`', $payload) . "\n```"],
+        ['role' => 'user', 'content' => $fileMeta . "\n```{$ext}\n" . str_replace('```', '``\\`', $payload) . "\n```"],
     ];
 
-    $rewriteText = '';
+    $resultText = '';
     $diff = '';
+    $status = 'ok';
+    $err = null;
 
     try {
         [$text, $meta] = cw_llm_chat($cfg, $messages, $model);
@@ -549,17 +689,43 @@ function cw_run_on_file(string $path, ?string $actionOverride = null): array
         if (isset($meta['usage']['prompt_tokens'])) $tokensIn = (int)$meta['usage']['prompt_tokens'];
         if (isset($meta['usage']['completion_tokens'])) $tokensOut = (int)$meta['usage']['completion_tokens'];
 
-        $blk = cw_extract_first_codeblock((string)$text);
-        $rewriteText = $blk ? (string)$blk[1] : (string)$text;
-        $diff = cw_unified_diff_external($full, $rewriteText);
+        $resultText = (string)$text;
+        
+        // For rewrite action, extract code block and compute diff
+        if ($action === 'rewrite') {
+            $blk = cw_extract_first_codeblock((string)$text);
+            $resultText = $blk ? (string)$blk[1] : (string)$text;
+            $diff = cw_unified_diff_external($full, $resultText);
+        }
     } catch (Throwable $e) {
         $status = 'error';
         $err = $e->getMessage();
     }
 
-    $actionId = cw_cwdb_insert_action($pdo, $runId, $fileId, 'rewrite', $model, $backendUsed, $system, $hash, $status, $err, $tokensIn, $tokensOut);
-    if ($status === 'ok') {
-        $pdo->prepare('INSERT OR REPLACE INTO rewrites(action_id,rewrite,diff) VALUES(?,?,?)')->execute([$actionId, $rewriteText, $diff]);
+    // Validate result is not empty before saving
+    $resultTrimmed = trim($resultText);
+    if ($status === 'ok' && $resultTrimmed === '') {
+        $status = 'error';
+        $err = 'Empty response from AI model';
+    }
+    
+    $actionId = cw_cwdb_insert_action($pdo, $runId, $fileId, $action, $model, $backendUsed, $system, $hash, $status, $err, $tokensIn, $tokensOut);
+    
+    if ($status === 'ok' && $resultTrimmed !== '') {
+        // Store results in action-specific tables (only if non-empty)
+        if ($action === 'summarize') {
+            $pdo->prepare('INSERT OR REPLACE INTO summaries(action_id,summary) VALUES(?,?)')->execute([$actionId, $resultText]);
+        } elseif ($action === 'rewrite') {
+            $pdo->prepare('INSERT OR REPLACE INTO rewrites(action_id,rewrite,diff) VALUES(?,?,?)')->execute([$actionId, $resultText, $diff]);
+        } elseif ($action === 'audit') {
+            $pdo->prepare('INSERT OR REPLACE INTO audits(action_id,findings) VALUES(?,?)')->execute([$actionId, $resultText]);
+        } elseif ($action === 'test') {
+            $pdo->prepare('INSERT OR REPLACE INTO tests(action_id,strategy) VALUES(?,?)')->execute([$actionId, $resultText]);
+        } elseif ($action === 'docs') {
+            $pdo->prepare('INSERT OR REPLACE INTO docs(action_id,documentation) VALUES(?,?)')->execute([$actionId, $resultText]);
+        } elseif ($action === 'refactor') {
+            $pdo->prepare('INSERT OR REPLACE INTO refactors(action_id,suggestions) VALUES(?,?)')->execute([$actionId, $resultText]);
+        }
     }
 
     return ['action_id' => $actionId, 'status' => $status, 'error' => $err];

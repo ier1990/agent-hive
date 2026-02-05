@@ -69,7 +69,7 @@ CONFIG_TEMPLATE = {
     "mode": "que",
     "scan_path": "/web",
     "file_types": ["php", "py", "sh", "log"],
-    "actions": ["summarize", "rewrite"],
+    "actions": ["summarize", "rewrite", "audit", "test", "docs", "refactor"],
     "rewrite_prompt": "Make this code more readable and modular.",
     "db_path": "/web/private/db/inbox/codewalker.db",
     "log_path": "/web/private/logs/codewalker.log",
@@ -80,18 +80,27 @@ CONFIG_TEMPLATE = {
     "max_filesize_kb": 512,
     "log_tail_lines": 1200,
     "backend": "ollama",           # auto|lmstudio|ollama|openai_compat|custom
-    "base_url": "http://192.168.0.142:11434",   # if backend==custom or openai_compat
+    "base_url": "http://127.0.0.1:11434",   # if backend==custom or openai_compat
     "api_key": None,              # if your endpoint needs a key
     "model": "",
     "model_timeout_seconds": 900,
-    "percent_rewrite": 50,        # % chance a chosen action is rewrite (vs summarize)
+    "percent_rewrite": 40,        # % chance of rewrite action
+    "percent_audit": 15,          # % chance of audit action
+    "percent_test": 15,           # % chance of test action
+    "percent_docs": 15,           # % chance of docs action
+    "percent_refactor": 15,       # % chance of refactor action
     "limit_per_run": 5,
     "lockfile": "/tmp/codewalker.lock",
     "respect_gitignore": True,
+    "use_active_ai": False,       # Follow /web/html/lib/ai_bootstrap.php active connection
 
     # Prompt templates (stored in settings DB)
     "prompt_rewrite_template": "rewrite",
     "prompt_summarize_template": "summarize",
+    "prompt_audit_template": "audit",
+    "prompt_test_template": "test",
+    "prompt_docs_template": "docs",
+    "prompt_refactor_template": "refactor",
 }
 DB_SETTINGS = "/web/private/db/codewalker_settings.db"
 
@@ -148,6 +157,26 @@ def get_setting(key, default=None):
         except Exception:
             return row[0]               
     return default
+
+
+def load_active_ai_settings() -> dict:
+    """Load active AI connection from /web/private/db/codewalker_settings.db (shared with PHP version)."""
+    try:
+        conn = sqlite3.connect(DB_SETTINGS)
+        cur = conn.cursor()
+        cur.execute("SELECT key, value FROM settings WHERE key IN ('provider', 'base_url', 'api_key', 'model', 'model_timeout_seconds', 'backend')")
+        rows = cur.fetchall()
+        conn.close()
+        
+        active = {}
+        for key, value in rows:
+            try:
+                active[key] = json.loads(value)
+            except Exception:
+                active[key] = value
+        return active
+    except Exception:
+        return {}
 
 
 
@@ -247,6 +276,38 @@ def _normalize_prompts(*sources):
             out.append(s)
     return out
 
+def pick_random_action(cfg: dict) -> str:
+    """Pick a random action based on configured percentages."""
+    percent_rewrite = int(cfg.get("percent_rewrite") or 40)
+    percent_audit = int(cfg.get("percent_audit") or 15)
+    percent_test = int(cfg.get("percent_test") or 15)
+    percent_docs = int(cfg.get("percent_docs") or 15)
+    percent_refactor = int(cfg.get("percent_refactor") or 15)
+    
+    total = percent_rewrite + percent_audit + percent_test + percent_docs + percent_refactor
+    if total == 0:
+        return "summarize"
+    
+    rand = random.randint(0, 99)
+    cumulative = 0
+    
+    cumulative += percent_rewrite
+    if rand < cumulative: return "rewrite"
+    
+    cumulative += percent_audit
+    if rand < cumulative: return "audit"
+    
+    cumulative += percent_test
+    if rand < cumulative: return "test"
+    
+    cumulative += percent_docs
+    if rand < cumulative: return "docs"
+    
+    cumulative += percent_refactor
+    if rand < cumulative: return "refactor"
+    
+    return "summarize"
+
 def pick_rewrite_prompt(cfg, file_path=None):
     # build a flat pool with your A + B + rewrite_prompt
     rp = (cfg.get("rewrite_prompt") or "").strip()
@@ -337,9 +398,48 @@ def load_config() -> dict:
         # Fall back to template; cron should still run.
         pass
 
-    # Env overrides (optional)
-    cfg.setdefault("base_url", os.getenv("LLM_BASE_URL"))
-    cfg.setdefault("api_key", os.getenv("LLM_API_KEY"))
+    # If use_active_ai is enabled, load active AI connection settings
+    if cfg.get("use_active_ai"):
+        try:
+            active = load_active_ai_settings()
+            if active:
+                provider = (active.get("provider") or "").lower()
+                base_url = (active.get("base_url") or "").rstrip("/")
+                api_key = active.get("api_key")
+                model = active.get("model")
+                timeout = active.get("model_timeout_seconds")
+                backend_from_db = active.get("backend", "").lower()
+                
+                # Map provider to backend
+                if provider in ("ollama",):
+                    backend = "ollama"
+                elif provider in ("local", "lmstudio"):
+                    backend = "lmstudio"
+                elif provider in ("openai", "openrouter", "anthropic", "custom"):
+                    backend = "openai_compat"
+                else:
+                    backend = backend_from_db or "ollama"
+                
+                if base_url:
+                    cfg["base_url"] = base_url
+                if api_key:
+                    cfg["api_key"] = api_key
+                if model:
+                    cfg["model"] = model
+                if timeout:
+                    cfg["model_timeout_seconds"] = timeout
+                cfg["backend"] = backend
+                cfg["provider"] = provider
+        except Exception:
+            # Silently fail; logging will be set up later if needed
+            pass
+
+    # Env overrides (only for local/lmstudio providers, to avoid overriding custom API keys)
+    provider = (cfg.get("provider") or "").lower()
+    if provider in ("local", "lmstudio", ""):
+        cfg.setdefault("base_url", os.getenv("LLM_BASE_URL"))
+        cfg.setdefault("api_key", os.getenv("LLM_API_KEY"))
+    
     return cfg
 
 
@@ -676,8 +776,46 @@ def gather_candidates(cfg: dict) -> list[str]:
             except OSError:
                 continue
             candidates.append(full)
+    
+    # Collect all candidates, then randomize and limit
     random.shuffle(candidates)
-    return candidates
+    limit = int(cfg.get("limit_per_run") or 50)
+    return candidates[:limit]
+
+
+def is_file_already_processed(conn: sqlite3.Connection, path: str, model: str, action: str) -> bool:
+    """Check if file has already been processed with this model/action and hasn't been modified."""
+    try:
+        cur = conn.cursor()
+        # Check if there's a successful action for this file/model/action combo
+        cur.execute(
+            "SELECT MAX(created_at) FROM actions WHERE file_id = (SELECT id FROM files WHERE path = ?) AND model = ? AND action = ? AND status = ?",
+            (path, model, action, "ok")
+        )
+        row = cur.fetchone()
+        if not row or not row[0]:
+            return False  # Not processed yet
+        
+        last_run_time_str = row[0]
+        try:
+            # Parse ISO format timestamp
+            last_run_time = dt.datetime.fromisoformat(last_run_time_str).timestamp()
+        except Exception:
+            return False
+        
+        # Compare with file modification time
+        try:
+            last_mod_time = os.path.getmtime(path)
+        except OSError:
+            return True  # Can't access file, skip it
+        
+        # If file was modified after last run, reprocess it
+        if last_mod_time > last_run_time:
+            return False
+        
+        return True  # File already processed and not modified
+    except Exception:
+        return False  # On error, allow processing
 
 
 def read_payload_for_model(path: str, cfg: dict) -> tuple[str, str]:
@@ -807,9 +945,17 @@ def run_once(cfg: dict) -> None:
                 # Skip unchanged if last action already saw this hash recently (optional)
                 # (We always log action to see cadence; you can add a dedup check if desired.)
 
-                # Decide action
-                do_rewrite = random.randint(1, 100) <= int(cfg.get("percent_rewrite") or 25)
-                action = "rewrite" if (do_rewrite and ext in CODE_LIKE_EXT) else "summarize"
+                # Decide action based on file type
+                if ext == "log":
+                    action = "summarize"
+                else:
+                    action = pick_random_action(cfg)
+
+                # Check for deduplication: skip if already processed with same model/action
+                model = cfg.get("model") or ""
+                if is_file_already_processed(conn, path, model, action):
+                    logging.info(f"[skip] {path} (already processed)")
+                    continue
 
                 # Build prompts
                 file_meta = f"File: {path}\nExt: {ext}\nSize: {len(full_bytes)} bytes\nLastModified: {human_ts(os.path.getmtime(path))}\n"
@@ -864,7 +1010,12 @@ def run_once(cfg: dict) -> None:
                 )
 
                 if status == "ok":
-                    if action == "summarize":
+                    # Validate response is not empty
+                    if not text or text.strip() == "":
+                        status = "error"
+                        err = "Empty response from AI model"
+                        conn.execute("UPDATE actions SET status=?, error=? WHERE id=?", (status, err, action_id))
+                    elif action == "summarize":
                         # Expect valid JSON; if invalid, store raw text
                         summary_text = text.strip()
                         try:

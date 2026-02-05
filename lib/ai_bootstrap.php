@@ -11,6 +11,13 @@ if (!function_exists('ai_settings_db_path')) {
   }
 }
 
+if (!function_exists('env')) {
+    function env($key, $default = null) {
+        $value = getenv($key);
+        return $value !== false ? $value : $default;
+    }
+}
+
 if (!function_exists('ai_settings_get_raw')) {
   function ai_settings_get_raw(): array {
     $out = [];
@@ -30,6 +37,7 @@ if (!function_exists('ai_settings_get_raw')) {
 
       $defaults = [
         'backend' => 'lmstudio',
+        'provider' => 'local',
         'base_url' => 'http://127.0.0.1:1234',
         'api_key' => null,
         'model' => 'openai/gpt-oss-20b',
@@ -86,10 +94,14 @@ if (!function_exists('ai_settings_get')) {
     $timeout = (int)($raw['model_timeout_seconds'] ?? 0);
     if ($timeout < 1) $timeout = 120;
 
-    // Provider detection
-    $provider = 'local';
-    if ($backend === 'openai') $provider = 'openai';
-    if ($backend === 'ollama') $provider = 'ollama';
+    // Provider detection: check for explicit provider field first, fall back to backend
+    $provider = strtolower((string)($raw['provider'] ?? ''));
+    if ($provider === '') {
+      // Legacy: detect from backend field
+      if ($backend === 'openai') $provider = 'openai';
+      elseif ($backend === 'ollama') $provider = 'ollama';
+      else $provider = 'local';
+    }
 
     // Env defaults (bootstrap.php already loads /web/private/.env)
     $envOpenaiBase = (string)env('OPENAI_BASE_URL', '');
@@ -117,15 +129,30 @@ if (!function_exists('ai_settings_get')) {
       $modelResolved = $envOpenaiModel ?: ($model ?: 'gpt-4o-mini');
     } elseif ($provider === 'ollama') {
       $baseResolved = $envOllamaBase ?: ($ollamaBase ?: ($llmBase ?: $base));
+      if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:11434';
       $baseResolved = ai_base_ensure_v1($baseResolved);
       $keyResolved = $envLlmKey ?: (string)($raw['api_key'] ?? '');
       $modelResolved = $model ?: 'llama3';
     } else {
-      // local openai-compatible
-      $baseResolved = $envLlmBase ?: ($llmBase ?: $base);
-      if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:1234';
+      // All other providers: local, openrouter, anthropic, custom, etc.
+      // For 'local' (LM Studio), allow LLM_BASE_URL/LLM_API_KEY override
+      // For openrouter, anthropic, custom: only use database values (no env override)
+      
+      if ($provider === 'local' || $provider === 'lmstudio') {
+        $baseResolved = $envLlmBase ?: ($llmBase ?: $base);
+        if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:1234';
+        $keyResolved = $envLlmKey ?: (string)($raw['api_key'] ?? '');
+      } else {
+        // openrouter, anthropic, custom: use database values only
+        $baseResolved = $base;
+        if ($baseResolved === '') {
+          $baseResolved = $llmBase ?: '';
+          if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:1234';
+        }
+        $keyResolved = (string)($raw['api_key'] ?? '');
+      }
+      
       $baseResolved = ai_base_ensure_v1($baseResolved);
-      $keyResolved = $envLlmKey ?: (string)($raw['api_key'] ?? '');
       $modelResolved = $model ?: 'openai/gpt-oss-20b';
     }
 
@@ -156,8 +183,13 @@ if (!function_exists('ai_settings_get')) {
 if (!function_exists('ai_settings_resolve_for_provider')) {
   function ai_settings_resolve_for_provider(string $provider, array $raw = null): array {
     $provider = strtolower(trim($provider));
-    if (!in_array($provider, ['openai', 'ollama', 'local'], true)) {
-      $provider = 'local';
+    // Allow any provider, but default to 'local' for unknown ones
+    $knownProviders = ['openai', 'ollama', 'local', 'openrouter', 'anthropic', 'custom'];
+    if (!in_array($provider, $knownProviders, true)) {
+      // Treat unknown providers as custom
+      if (empty($raw['base_url'] ?? '')) {
+        $provider = 'local';
+      }
     }
 
     if ($raw === null) {
@@ -191,6 +223,26 @@ if (!function_exists('ai_settings_resolve_for_provider')) {
       $baseResolved = ai_base_ensure_v1($baseResolved);
       $keyResolved = $envOpenaiKey ?: (string)($raw['api_key'] ?? '');
       $modelResolved = $envOpenaiModel ?: ($rawModel ?: 'gpt-4o-mini');
+    } elseif ($provider === 'anthropic') {
+      // Anthropic provider
+      $baseResolved = $envOpenaiBase ?: ($base ?: 'https://api.anthropic.com');
+      $baseResolved = ai_base_ensure_v1($baseResolved);
+      $keyResolved = $envOpenaiKey ?: (string)($raw['api_key'] ?? '');
+      $modelResolved = $rawModel ?: 'claude-3-5-sonnet-20241022';
+    } elseif ($provider === 'openrouter') {
+      // OpenRouter provider
+      $baseResolved = $base ?: 'https://openrouter.ai/api/v1';
+      $baseResolved = ai_base_ensure_v1($baseResolved);
+      $keyResolved = $envOpenaiKey ?: (string)($raw['api_key'] ?? '');
+      $modelResolved = $rawModel ?: 'openai/gpt-4-turbo';
+    } elseif ($provider === 'custom') {
+      // Custom provider - requires base_url
+      $baseResolved = $base ?: '';
+      if ($baseResolved !== '') {
+        $baseResolved = ai_base_ensure_v1($baseResolved);
+      }
+      $keyResolved = (string)($raw['api_key'] ?? '');
+      $modelResolved = $rawModel ?: '';
     } elseif ($provider === 'ollama') {
       $baseResolved = $envOllamaBase ?: ($ollamaBase ?: ($envLlmBase ?: ($llmBase ?: $base)));
       if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:11434';
@@ -198,6 +250,7 @@ if (!function_exists('ai_settings_resolve_for_provider')) {
       $keyResolved = $envLlmKey ?: (string)($raw['api_key'] ?? '');
       $modelResolved = $rawModel ?: 'llama3';
     } else {
+      // Local (LM Studio) - default
       $baseResolved = $envLlmBase ?: ($llmBase ?: $base);
       if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:1234';
       $baseResolved = ai_base_ensure_v1($baseResolved);
@@ -231,7 +284,8 @@ if (!function_exists('ai_settings_validate')) {
     $model = (string)($s['model'] ?? '');
     $key = (string)($s['api_key'] ?? '');
 
-    if ($provider === '' || !in_array($provider, ['openai', 'local', 'ollama'], true)) {
+    $validProviders = ['openai', 'local', 'ollama', 'openrouter', 'anthropic', 'custom'];
+    if ($provider === '' || !in_array($provider, $validProviders, true)) {
       $errs[] = 'Invalid provider.';
     }
     if ($base === '' || !preg_match('~^https?://~i', $base)) {
@@ -240,9 +294,13 @@ if (!function_exists('ai_settings_validate')) {
     if ($model === '') {
       $errs[] = 'Model is required.';
     }
-    if ($provider === 'openai' && $key === '') {
-      $errs[] = 'OpenAI provider requires an API key.';
+    
+    // Require API key for providers that need it
+    $needsKey = ['openai', 'openrouter', 'anthropic'];
+    if (in_array($provider, $needsKey, true) && $key === '') {
+      $errs[] = ucfirst($provider) . ' provider requires an API key.';
     }
+    
     return $errs;
   }
 }
@@ -256,9 +314,13 @@ if (!function_exists('ai_settings_save')) {
     $timeout = (int)($new['timeout_seconds'] ?? 0);
     if ($timeout < 1) $timeout = 120;
 
-    $backend = 'lmstudio';
-    if ($provider === 'openai') $backend = 'openai';
-    if ($provider === 'ollama') $backend = 'ollama';
+    // Map provider to backend (store provider directly for new ones)
+    $backend = $provider;
+    // Legacy: map common names
+    if ($provider === 'local' || $provider === 'lmstudio') $backend = 'lmstudio';
+    elseif ($provider === 'openai') $backend = 'openai';
+    elseif ($provider === 'ollama') $backend = 'ollama';
+    // New providers (openrouter, anthropic, custom) stored as-is with provider field
 
     $dbPath = ai_settings_db_path();
     $dir = dirname($dbPath);
@@ -276,6 +338,7 @@ if (!function_exists('ai_settings_save')) {
       $stmt = $pdo->prepare('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
 
       $stmt->execute(['backend', json_encode($backend)]);
+      $stmt->execute(['provider', json_encode($provider)]);
       // Keep base_url in DB without /v1 (human-editable); derive /v1 at runtime.
       $baseNoV1 = preg_replace('~/v1$~', '', rtrim($baseUrl, '/'));
       $stmt->execute(['base_url', json_encode($baseNoV1)]);

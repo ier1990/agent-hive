@@ -165,9 +165,12 @@ $connections = ai_saved_profiles_recent(20);
 
 // Provider presets
 $presets = [
-  'local' => ['url' => 'http://127.0.0.1:1234/v1', 'label' => 'Local (LM Studio)'],
-  'ollama' => ['url' => 'http://127.0.0.1:11434/v1', 'label' => 'Ollama'],
-  'openai' => ['url' => 'https://api.openai.com/v1', 'label' => 'OpenAI', 'needs_key' => true],
+  'local' => ['url' => 'http://127.0.0.1:1234/v1', 'label' => 'Local (LM Studio)', 'icon' => '🖥️'],
+  'ollama' => ['url' => 'http://127.0.0.1:11434/v1', 'label' => 'Ollama', 'icon' => '🦙'],
+  'openai' => ['url' => 'https://api.openai.com/v1', 'label' => 'OpenAI', 'needs_key' => true, 'icon' => '🔑'],
+  'openrouter' => ['url' => 'https://openrouter.ai/api/v1', 'label' => 'OpenRouter', 'needs_key' => true, 'icon' => '🌐', 'docs' => 'https://openrouter.ai/docs'],
+  'anthropic' => ['url' => 'https://api.anthropic.com/v1', 'label' => 'Anthropic (Claude)', 'needs_key' => true, 'icon' => '🧠'],
+  'custom' => ['url' => '', 'label' => 'Custom Provider', 'needs_url' => true, 'needs_key' => false, 'icon' => '⚙️'],
 ];
 
 ?><!DOCTYPE html>
@@ -213,10 +216,30 @@ $presets = [
         <div class="text-lg font-semibold text-gray-900">
           <?php 
             $activeName = '';
+            // Try to find match by hash first
             foreach($connections as $c) {
               if (($c['hash'] ?? '') === $activeHash) {
                 $activeName = $c['name'] ?? '';
                 break;
+              }
+            }
+            // Fallback: try to match by provider, model, base_url without hash
+            if ($activeName === '' && !empty($connections)) {
+              foreach($connections as $c) {
+                $cProvider = strtolower((string)($c['provider'] ?? ''));
+                $cModel = (string)($c['model'] ?? '');
+                $cBase = rtrim((string)($c['base_url'] ?? ''), '/');
+                
+                $aProvider = strtolower($active['provider'] ?? '');
+                $aModel = (string)($active['model'] ?? '');
+                $aBase = rtrim((string)($active['base_url'] ?? ''), '/');
+                // Normalize both to exclude /v1
+                $aBase = preg_replace('~/v1$~', '', $aBase);
+                
+                if ($cProvider === $aProvider && $cModel === $aModel && $cBase === $aBase) {
+                  $activeName = $c['name'] ?? '';
+                  break;
+                }
               }
             }
             echo $activeName ? h($activeName) : '<span class="text-gray-400">None configured</span>';
@@ -307,10 +330,17 @@ $presets = [
             >
           </div>
 
-          <div id="api_key_field" style="<?php echo ($formData['provider'] ?? $editing['provider'] ?? 'local') === 'openai' ? '' : 'display:none'; ?>">
+          <div id="custom_url_section" style="<?php echo ($formData['provider'] ?? $editing['provider'] ?? 'local') === 'custom' ? '' : 'display:none'; ?>">
+            <div class="p-3 bg-blue-50 border border-blue-200 rounded-md mb-3">
+              <p class="text-xs text-blue-800">
+                <strong>Custom Provider:</strong> Enter your provider's API URL above (e.g., https://your-provider.com/v1)
+              </p>
+            </div>
+          </div>
+
+          <div id="api_key_field" style="<?php echo ($formData['provider'] ?? $editing['provider'] ?? 'local') === 'openai' || ($formData['provider'] ?? $editing['provider'] ?? 'local') === 'openrouter' || ($formData['provider'] ?? $editing['provider'] ?? 'local') === 'anthropic' ? '' : 'display:none'; ?>">
             <label class="block text-xs font-medium text-gray-700 mb-1">
-              API Key <span class="text-red-500">*</span>
-              <span class="text-gray-500 font-normal">(required for OpenAI)</span>
+              <span id="api_key_label">API Key</span> <span class="text-red-500">*</span>
             </label>
             <input 
               type="password" 
@@ -320,6 +350,7 @@ $presets = [
               placeholder="sk-..."
               class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             >
+            <p class="text-xs text-gray-600 mt-1">Your API key is stored securely and never shared.</p>
           </div>
 
           <button 
@@ -368,18 +399,37 @@ $presets = [
                 Model <span class="text-red-500">*</span>
                 <span class="text-gray-500 font-normal text-xs">(will auto-generate connection name)</span>
               </label>
-              <select 
-                name="model" 
-                id="model"
-                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                onchange="updateConnectionName()"
-                required
-              >
-                <option value="">-- Choose a model --</option>
-                <?php foreach($modelList['models'] as $m): ?>
-                  <option value="<?php echo h($m); ?>"><?php echo h($m); ?></option>
-                <?php endforeach; ?>
-              </select>
+              <?php if (!empty($modelList['models'])): ?>
+                <!-- Dropdown: Models available from provider -->
+                <select 
+                  name="model" 
+                  id="model"
+                  class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  onchange="updateConnectionName()"
+                  required
+                >
+                  <option value="">-- Choose a model --</option>
+                  <?php foreach($modelList['models'] as $m): ?>
+                    <option value="<?php echo h($m); ?>"><?php echo h($m); ?></option>
+                  <?php endforeach; ?>
+                </select>
+              <?php else: ?>
+                <!-- Text Input: Manual entry when no models available -->
+                <div class="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-md">
+                  <p class="text-xs text-amber-800">
+                    <strong>No models found.</strong> Enter the model name manually (e.g., <code>gpt-4-turbo</code>, <code>claude-3-5-sonnet-20241022</code>)
+                  </p>
+                </div>
+                <input 
+                  type="text" 
+                  name="model" 
+                  id="model"
+                  placeholder="e.g., openai/gpt-4-turbo or claude-3-5-sonnet-20241022"
+                  class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  onchange="updateConnectionName()"
+                  required
+                >
+              <?php endif; ?>
             </div>
 
             <div>
@@ -426,8 +476,46 @@ $presets = [
         const provider = document.getElementById('provider').value;
         const preset = presets[provider];
         if (preset) {
-          document.getElementById('base_url').value = preset.url || '';
-          document.getElementById('api_key_field').style.display = preset.needs_key ? '' : 'none';
+          // Set base URL from preset (only if not custom provider)
+          if (provider !== 'custom') {
+            document.getElementById('base_url').value = preset.url || '';
+          }
+          
+          // Show/hide custom URL input based on provider
+          const customUrlSection = document.getElementById('custom_url_section');
+          if (customUrlSection) {
+            customUrlSection.style.display = provider === 'custom' ? '' : 'none';
+          }
+          
+          // Show/hide API key field based on provider's needs_key flag
+          const apiKeyField = document.getElementById('api_key_field');
+          if (apiKeyField) {
+            apiKeyField.style.display = preset.needs_key ? '' : 'none';
+          }
+          
+          // Update API key placeholder and label
+          const apiKeyInput = document.getElementById('api_key');
+          if (apiKeyInput && preset.needs_key) {
+            const placeholders = {
+              'openai': 'sk-...',
+              'openrouter': 'sk-or-...',
+              'anthropic': 'sk-ant-...',
+              'custom': 'your-api-key'
+            };
+            apiKeyInput.placeholder = placeholders[provider] || 'your-api-key';
+          }
+          
+          // Update API key label
+          const apiKeyLabel = document.getElementById('api_key_label');
+          if (apiKeyLabel) {
+            const labels = {
+              'openai': 'API Key (required for OpenAI)',
+              'openrouter': 'API Key (required for OpenRouter)',
+              'anthropic': 'API Key (required for Anthropic)',
+              'custom': 'API Key (if required)'
+            };
+            apiKeyLabel.textContent = labels[provider] || 'API Key';
+          }
         }
       }
 
@@ -440,18 +528,28 @@ $presets = [
           // Auto-generate name: Provider - Model
           const providerLabels = {
             'local': 'Local',
-            'ollama': 'Ollama', 
-            'openai': 'OpenAI'
+            'ollama': 'Ollama',
+            'openai': 'OpenAI',
+            'openrouter': 'OpenRouter',
+            'anthropic': 'Anthropic',
+            'custom': 'Custom'
           };
           const providerLabel = providerLabels[provider] || provider;
           nameField.value = providerLabel + ' - ' + model;
         }
       }
 
-      // Auto-fill name when model changes
-      <?php if (is_array($modelList) && !empty($modelList['ok'])): ?>
-        document.getElementById('model').addEventListener('change', updateConnectionName);
-      <?php endif; ?>
+      // Auto-fill name when model changes (works for both select and text input)
+      const modelElement = document.getElementById('model');
+      if (modelElement) {
+        modelElement.addEventListener('change', updateConnectionName);
+        modelElement.addEventListener('input', updateConnectionName);
+      }
+
+      // Initialize form on page load
+      document.addEventListener('DOMContentLoaded', function() {
+        updateProviderPreset();
+      });
     </script>
   <?php endif; ?>
 
