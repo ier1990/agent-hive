@@ -478,10 +478,16 @@ elseif ($view === 'action') {
                 $rawSummary = (string)$row['summary'];
                 $mdSummary = cw_summary_to_markdown($rawSummary);
                 echo '<h4>'.($action_type==='create_prompt_from_code' ? 'Generated Prompt' : 'Summary').'</h4>';
-                echo '<div class="markdown-content" id="summary-'.h((string)$id).'"></div>';
+                echo '<div class="markdown-content" id="summary-'.h((string)$id).'" style="white-space:pre-wrap"><pre>'.h($mdSummary).'</pre></div>';
                 echo '<details style="margin-top:1rem"><summary>Raw Stored Summary</summary><pre>'.h($rawSummary).'</pre></details>';
                 echo '<script>
-                document.getElementById("summary-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($mdSummary) . ');
+                (function() {
+                  if (typeof marked !== "undefined") {
+                    var container = document.getElementById("summary-'.h((string)$id).'");
+                    var formatted = marked.parse(' . json_encode($mdSummary) . ');
+                    if (formatted && formatted.trim()) container.innerHTML = formatted;
+                  }
+                })();
                 </script>';
             }
         } elseif ($action_type === 'audit') {
@@ -491,10 +497,16 @@ elseif ($view === 'action') {
                 $rawAudit = (string)$row['findings'];
                 $mdAudit = cw_summary_to_markdown($rawAudit);
                 echo '<h4>Security Audit</h4>';
-                echo '<div class="markdown-content" id="audit-'.h((string)$id).'"></div>';
+                echo '<div class="markdown-content" id="audit-'.h((string)$id).'" style="white-space:pre-wrap"><pre>'.h($mdAudit).'</pre></div>';
                 echo '<details style="margin-top:1rem"><summary>Raw Audit Data</summary><pre>'.h($rawAudit).'</pre></details>';
                 echo '<script>
-                document.getElementById("audit-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($mdAudit) . ');
+                (function() {
+                  if (typeof marked !== "undefined") {
+                    var container = document.getElementById("audit-'.h((string)$id).'");
+                    var formatted = marked.parse(' . json_encode($mdAudit) . ');
+                    if (formatted && formatted.trim()) container.innerHTML = formatted;
+                  }
+                })();
                 </script>';
             }
         } elseif ($action_type === 'test') {
@@ -504,10 +516,16 @@ elseif ($view === 'action') {
                 $rawTest = (string)$row['strategy'];
                 $mdTest = cw_summary_to_markdown($rawTest);
                 echo '<h4>Test Strategy</h4>';
-                echo '<div class="markdown-content" id="test-'.h((string)$id).'"></div>';
+                echo '<div class="markdown-content" id="test-'.h((string)$id).'" style="white-space:pre-wrap"><pre>'.h($mdTest).'</pre></div>';
                 echo '<details style="margin-top:1rem"><summary>Raw Test Data</summary><pre>'.h($rawTest).'</pre></details>';
                 echo '<script>
-                document.getElementById("test-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($mdTest) . ');
+                (function() {
+                  if (typeof marked !== "undefined") {
+                    var container = document.getElementById("test-'.h((string)$id).'");
+                    var formatted = marked.parse(' . json_encode($mdTest) . ');
+                    if (formatted && formatted.trim()) container.innerHTML = formatted;
+                  }
+                })();
                 </script>';
             }
         } elseif ($action_type === 'docs') {
@@ -516,10 +534,20 @@ elseif ($view === 'action') {
             else {
                 $rawDocs = (string)$row['documentation'];
                 echo '<h4>Documentation</h4>';
-                echo '<div class="markdown-content" id="docs-'.h((string)$id).'"></div>';
-                echo '<details style="margin-top:1rem"><summary>Raw Documentation</summary><pre>'.h($rawDocs).'</pre></details>';
+                echo '<div class="markdown-content" id="docs-'.h((string)$id).'" style="white-space:pre-wrap"><pre>'.h($rawDocs).'</pre></div>';
+                echo '<details style="margin-top:1rem"><summary>Formatted View</summary><div id="docs-fmt-'.h((string)$id).'"></div></details>';
                 echo '<script>
-                document.getElementById("docs-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($rawDocs) . ');
+                (function() {
+                  if (typeof marked !== "undefined") {
+                    var container = document.getElementById("docs-'.h((string)$id).'");
+                    var fmt = document.getElementById("docs-fmt-'.h((string)$id).'");
+                    var formatted = marked.parse(' . json_encode($rawDocs) . ');
+                    if (formatted && formatted.trim()) {
+                      container.innerHTML = formatted;
+                      if (fmt) fmt.innerHTML = formatted;
+                    }
+                  }
+                })();
                 </script>';
             }
         } elseif ($action_type === 'refactor') {
@@ -529,10 +557,16 @@ elseif ($view === 'action') {
                 $rawRefactor = (string)$row['suggestions'];
                 $mdRefactor = cw_summary_to_markdown($rawRefactor);
                 echo '<h4>Refactoring Suggestions</h4>';
-                echo '<div class="markdown-content" id="refactor-'.h((string)$id).'"></div>';
+                echo '<div class="markdown-content" id="refactor-'.h((string)$id).'" style="white-space:pre-wrap"><pre>'.h($mdRefactor).'</pre></div>';
                 echo '<details style="margin-top:1rem"><summary>Raw Refactor Data</summary><pre>'.h($rawRefactor).'</pre></details>';
                 echo '<script>
-                document.getElementById("refactor-'.h((string)$id).'").innerHTML = marked.parse(' . json_encode($mdRefactor) . ');
+                (function() {
+                  if (typeof marked !== "undefined") {
+                    var container = document.getElementById("refactor-'.h((string)$id).'");
+                    var formatted = marked.parse(' . json_encode($mdRefactor) . ');
+                    if (formatted && formatted.trim()) container.innerHTML = formatted;
+                  }
+                })();
                 </script>';
             }
         } elseif ($action_type === 'rewrite') {
