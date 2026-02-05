@@ -322,22 +322,22 @@ echo '<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></sc
 echo '</head><body>';
 
 echo '<div class="nav">';
-echo '<strong>CodeWalker Admin</strong>';
+echo '<strong>CodeWalker</strong>';
 $tabs = [
-    'dashboard' => 'Dashboard',
-    'actions' => 'Actions',
-    'rewrites' => 'Rewrites',
-    'files' => 'Files',
-    'queue' => 'Queue',
-    'mc' => 'MC Browser',  //index.php
-    'config' => 'Config', //codew_config.php
+    'dashboard' => '📊 Dashboard',
+    'actions' => '⚙️ Actions',
+    'rewrites' => '✏️ Rewrites',
+    'files' => '📁 Files',
+    'queue' => '⏳ Queue',
+    'browse' => '🔍 Browse',
+    'config' => '⚙️ Settings',
 ];   
    
 
 foreach ($tabs as $k=>$label) {    
     $cls = $view===$k? 'active':'';
-    if ($k === 'mc') {
-        $url = 'index.php?dir='.urlencode($WRITE_ROOT); // Link to MC browser at write root
+    if ($k === 'browse') {
+        $url = 'admin_MC_Browser.php?dir='.urlencode($WRITE_ROOT); // Link to CodeWalker-specific file browser
     } elseif ($k === 'config') {
         $url = 'codew_config.php'; // Link to CodeWalker config
     }else{
