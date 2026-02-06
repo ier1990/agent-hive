@@ -116,7 +116,10 @@ with:
 - **/v1 API** endpoints (JSON, key + scope auth, rate limited)
 - **Notes** web app at `/admin/notes/` (SQLite-backed, includes a small “Jobs” health view)
 - **Chat routing** at `/v1/chat/` (autoselector) and `/v1/chat/completions` (OpenAI-compatible shim)
-- **Admin tools** under `/admin/` (protected with a “bootstrap token” flow to avoid fresh-install lockouts)- **CodeWalker** — AI-powered codebase analysis and modernization tool
+- **Admin tools** under `/admin/` (protected with a “bootstrap token” flow to avoid fresh-install lockouts)
+- **CodeWalker** — AI-powered codebase analysis and modernization tool
+
+![CodeWalker Architecture](codewalker.png)
 
 ### CodeWalker
 
@@ -165,7 +168,8 @@ Edit settings at `/admin/codewalker.php?view=settings` or via the settings datab
 At ~$0.24 per 250 files (using efficient models), CodeWalker provides comprehensive codebase intelligence at scale.
 
 ---
-It’s designed to run on a normal Linux box with Apache + PHP and a writable private data directory (default: `/web/private`).
+
+It's designed to run on a normal Linux box with Apache + PHP and a writable private data directory (default: `/web/private`).
 
 ---
 
@@ -268,7 +272,7 @@ This repo intentionally separates **code** from **private data**.
 	- SQLite DBs
 	- rate-limit state: `${PRIVATE_ROOT}/ratelimit`
 
-The git ignore policy is set up so you don’t accidentally commit private data.
+The git ignore policy is set up so you don't accidentally commit private data.
 
 ---
 
