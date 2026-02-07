@@ -204,6 +204,9 @@ if (!isset($_SESSION['ai_chat_last_debug']) || !is_array($_SESSION['ai_chat_last
 
 $settings = ai_settings_get();
 
+// Load saved connections for model dropdown
+$savedConnections = ai_saved_profiles_recent(100);
+
 $ai = new AI_Header([
   'missing_policy' => 'ignore',
   'debug' => false,
@@ -402,8 +405,27 @@ $lastDebug = is_array($_SESSION['ai_chat_last_debug']) ? $_SESSION['ai_chat_last
                 </select>
               </div>
               <div>
-                <label class="block text-xs text-slate-400 mb-1">Model</label>
-                <input name="model" value="<?=h($model)?>" class="w-full rounded bg-slate-950 border border-slate-700 px-2 py-2 text-sm" placeholder="e.g. gpt-4o-mini">
+                <label class="block text-xs text-slate-400 mb-1">Model / Connection</label>
+                <?php if (!empty($savedConnections)): ?>
+                  <select name="model" class="w-full rounded bg-slate-950 border border-slate-700 px-2 py-2 text-sm">
+                    <option value="">-- Select a saved connection --</option>
+                    <?php foreach ($savedConnections as $conn): ?>
+                      <?php 
+                        $connModel = (string)($conn['model'] ?? '');
+                        $connName = (string)($conn['name'] ?? '');
+                        $connProvider = (string)($conn['provider'] ?? '');
+                        $displayText = $connName . ' (' . $connModel . ')';
+                        if ($connProvider) $displayText .= ' - ' . $connProvider;
+                      ?>
+                      <option value="<?=h($connModel)?>" <?= $model === $connModel ? 'selected' : '' ?>><?=h($displayText)?></option>
+                    <?php endforeach; ?>
+                    <option value="" disabled>──────────────</option>
+                    <option value="<?=h($model)?>" <?= !empty($model) && !in_array($model, array_column($savedConnections, 'model')) ? 'selected' : '' ?>>Custom: <?=h($model)?></option>
+                  </select>
+                <?php else: ?>
+                  <input name="model" value="<?=h($model)?>" class="w-full rounded bg-slate-950 border border-slate-700 px-2 py-2 text-sm" placeholder="e.g. gpt-4o-mini">
+                  <div class="text-xs text-slate-400 mt-1">No saved connections. <a href="admin_AI_Setup.php" class="text-blue-400 hover:underline">Set up connections</a></div>
+                <?php endif; ?>
               </div>
             </div>
 
