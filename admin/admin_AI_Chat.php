@@ -104,16 +104,34 @@ function ai_chat_call_openai_compat(array $settings, string $model, array $messa
     return ['ok' => false, 'error' => 'Missing base URL. Configure AI first.', 'assistant' => '', 'raw' => null];
   }
 
-  // ai_settings_get() returns a /v1 base. We call /chat/completions under it.
-  $url = $base . '/chat/completions';
+  $provider = strtolower(trim((string)($settings['provider'] ?? '')));
+
+  // Build the correct endpoint URL based on provider
+  if ($provider === 'ollama') {
+    // Ollama native: base/api/chat (streaming disabled below)
+    $url = $base . '/api/chat';
+  } else {
+    // OpenAI-compatible: ensure /v1/chat/completions
+    if (!preg_match('~/v1$~', $base)) {
+      $base .= '/v1';
+    }
+    $url = $base . '/chat/completions';
+  }
 
   $payload = [
     'model' => $model,
     'messages' => $messages,
     'temperature' => $temperature,
   ];
-  if ($maxTokens > 0) {
+  if ($maxTokens > 0 && $provider !== 'ollama') {
     $payload['max_tokens'] = $maxTokens;
+  }
+  // Ollama streams by default — disable it
+  if ($provider === 'ollama') {
+    $payload['stream'] = false;
+    if ($maxTokens > 0) {
+      $payload['options'] = ['num_predict' => $maxTokens];
+    }
   }
 
   $headers = [
@@ -183,8 +201,13 @@ function ai_chat_call_openai_compat(array $settings, string $model, array $messa
   }
 
   $assistant = '';
+  // OpenAI format: choices[0].message.content
   if (isset($decoded['choices'][0]['message']['content'])) {
     $assistant = (string)$decoded['choices'][0]['message']['content'];
+  }
+  // Ollama /api/chat format: message.content
+  if ($assistant === '' && isset($decoded['message']['content'])) {
+    $assistant = (string)$decoded['message']['content'];
   }
 
   if ($assistant === '') {
