@@ -204,7 +204,7 @@ if (!isset($_SESSION['ai_chat_last_debug']) || !is_array($_SESSION['ai_chat_last
 
 $settings = ai_settings_get();
 
-// Load saved connections for model dropdown
+// Load saved connections for connection dropdown
 $savedConnections = ai_saved_profiles_recent(100);
 
 $ai = new AI_Header([
@@ -229,7 +229,24 @@ if ($selectedTemplate === '') {
     ? $preferredDefaultTemplate
     : $builtinTemplateName;
 }
-$model = (string)($_POST['model'] ?? ($settings['model'] ?? ''));
+
+// Connection selection - load full connection config
+$selectedConnectionHash = (string)($_POST['connection'] ?? '');
+if ($selectedConnectionHash !== '') {
+  $connData = ai_saved_profiles_get($selectedConnectionHash);
+  if ($connData) {
+    // Override settings with selected connection
+    $settings = [
+      'provider' => (string)($connData['provider'] ?? ''),
+      'base_url' => (string)($connData['base_url'] ?? ''),
+      'model' => (string)($connData['model'] ?? ''),
+      'api_key' => (string)($connData['api_key'] ?? ''),
+      'timeout_seconds' => (int)($connData['timeout_seconds'] ?? 120),
+    ];
+  }
+}
+
+$model = (string)($settings['model'] ?? '');
 $temperature = (string)($_POST['temperature'] ?? '0.2');
 $maxTokens = (string)($_POST['max_tokens'] ?? '800');
 $timeoutSeconds = (int)($_POST['timeout_seconds'] ?? (int)($settings['timeout_seconds'] ?? 120));
@@ -405,26 +422,28 @@ $lastDebug = is_array($_SESSION['ai_chat_last_debug']) ? $_SESSION['ai_chat_last
                 </select>
               </div>
               <div>
-                <label class="block text-xs text-slate-400 mb-1">Model / Connection</label>
+                <label class="block text-xs text-slate-400 mb-1">Connection</label>
                 <?php if (!empty($savedConnections)): ?>
-                  <select name="model" class="w-full rounded bg-slate-950 border border-slate-700 px-2 py-2 text-sm">
+                  <select name="connection" class="w-full rounded bg-slate-950 border border-slate-700 px-2 py-2 text-sm">
                     <option value="">-- Select a saved connection --</option>
                     <?php foreach ($savedConnections as $conn): ?>
                       <?php 
-                        $connModel = (string)($conn['model'] ?? '');
+                        $connHash = (string)($conn['hash'] ?? '');
                         $connName = (string)($conn['name'] ?? '');
+                        $connModel = (string)($conn['model'] ?? '');
                         $connProvider = (string)($conn['provider'] ?? '');
                         $displayText = $connName . ' (' . $connModel . ')';
                         if ($connProvider) $displayText .= ' - ' . $connProvider;
                       ?>
-                      <option value="<?=h($connModel)?>" <?= $model === $connModel ? 'selected' : '' ?>><?=h($displayText)?></option>
+                      <option value="<?=h($connHash)?>" <?= $selectedConnectionHash === $connHash ? 'selected' : '' ?>><?=h($displayText)?></option>
                     <?php endforeach; ?>
-                    <option value="" disabled>──────────────</option>
-                    <option value="<?=h($model)?>" <?= !empty($model) && !in_array($model, array_column($savedConnections, 'model')) ? 'selected' : '' ?>>Custom: <?=h($model)?></option>
                   </select>
+                  <div class="text-xs text-slate-400 mt-1">
+                    Selected: <span class="text-slate-200"><?=h($model)?></span> @ <span class="text-slate-200"><?=h((string)($settings['base_url'] ?? 'default'))?></span>
+                  </div>
                 <?php else: ?>
-                  <input name="model" value="<?=h($model)?>" class="w-full rounded bg-slate-950 border border-slate-700 px-2 py-2 text-sm" placeholder="e.g. gpt-4o-mini">
-                  <div class="text-xs text-slate-400 mt-1">No saved connections. <a href="admin_AI_Setup.php" class="text-blue-400 hover:underline">Set up connections</a></div>
+                  <div class="text-sm text-slate-400">No saved connections.</div>
+                  <a href="admin_AI_Setup.php" class="text-blue-400 hover:underline text-sm">Set up connections →</a>
                 <?php endif; ?>
               </div>
             </div>
