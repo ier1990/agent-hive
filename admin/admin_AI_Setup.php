@@ -130,9 +130,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_valid($_POST['csrf_token'] ?? 
       if ($hash === $activeHash) {
         $errors[] = 'Cannot delete active connection. Switch to another connection first.';
       } else {
-        // TODO: Implement actual deletion in your backend
-        // For now, just show success (you'll need to add ai_saved_profiles_delete($hash) function)
-        $success = 'Connection deleted';
+        // Delete from DB
+        $dbPath = function_exists('ai_saved_profiles_db_path') ? ai_saved_profiles_db_path() : '/web/private/db/ai_saved_profiles.db';
+        try {
+          $pdo = new PDO('sqlite:' . $dbPath, null, null, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+          ]);
+          $stmt = $pdo->prepare('DELETE FROM saved_profiles WHERE hash = ?');
+          $stmt->execute([$hash]);
+          $success = 'Connection deleted';
+        } catch (Throwable $e) {
+          $errors[] = 'Delete failed: ' . $e->getMessage();
+        }
       }
     }
   }
@@ -164,6 +173,7 @@ $activeHash = ai_saved_profiles_hash([
 $connections = ai_saved_profiles_recent(20);
 
 // Provider presets
+
 $presets = [
   'local' => ['url' => 'http://127.0.0.1:1234/v1', 'label' => 'Local (LM Studio)', 'icon' => '🖥️'],
   'ollama' => ['url' => 'http://127.0.0.1:11434/v1', 'label' => 'Ollama', 'icon' => '🦙'],
@@ -317,7 +327,7 @@ $presets = [
           <div>
             <label class="block text-xs font-medium text-gray-700 mb-1">
               Base URL <span class="text-red-500">*</span>
-              <span class="text-gray-500 font-normal">(changes when you select provider)</span>
+              <span class="text-gray-500 font-normal">(auto-fills when you select provider, can be edited)</span>
             </label>
             <input 
               type="url" 
@@ -326,6 +336,7 @@ $presets = [
               value="<?php echo h($formData['base_url'] ?? $editing['base_url'] ?? ''); ?>"
               placeholder="http://127.0.0.1:1234/v1"
               class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              data-original="<?php echo h($formData['base_url'] ?? $editing['base_url'] ?? ''); ?>"
               required
             >
           </div>
@@ -471,14 +482,23 @@ $presets = [
 
     <script>
       const presets = <?php echo json_encode($presets); ?>;
+      const isEditing = <?php echo $editing ? 'true' : 'false'; ?>;
+      let userEditedUrl = false;
       
       function updateProviderPreset() {
         const provider = document.getElementById('provider').value;
         const preset = presets[provider];
+        const baseUrlField = document.getElementById('base_url');
+        
         if (preset) {
-          // Set base URL from preset (only if not custom provider)
-          if (provider !== 'custom') {
-            document.getElementById('base_url').value = preset.url || '';
+          // Only auto-fill URL if:
+          // 1. NOT editing an existing connection
+          // 2. User hasn't manually edited the URL field
+          // 3. Not a custom provider
+          const shouldAutoFill = !isEditing && !userEditedUrl && provider !== 'custom';
+          
+          if (shouldAutoFill && preset.url) {
+            baseUrlField.value = preset.url;
           }
           
           // Show/hide custom URL input based on provider
@@ -539,6 +559,14 @@ $presets = [
         }
       }
 
+      // Track when user manually edits the URL field
+      const baseUrlField = document.getElementById('base_url');
+      if (baseUrlField) {
+        baseUrlField.addEventListener('input', function() {
+          userEditedUrl = true;
+        });
+      }
+
       // Auto-fill name when model changes (works for both select and text input)
       const modelElement = document.getElementById('model');
       if (modelElement) {
@@ -548,7 +576,24 @@ $presets = [
 
       // Initialize form on page load
       document.addEventListener('DOMContentLoaded', function() {
-        updateProviderPreset();
+        // Only auto-fill provider preset if NOT editing
+        if (!isEditing) {
+          updateProviderPreset();
+        } else {
+          // Still update UI elements (API key visibility, etc) without changing URL
+          const provider = document.getElementById('provider').value;
+          const preset = presets[provider];
+          if (preset) {
+            const customUrlSection = document.getElementById('custom_url_section');
+            if (customUrlSection) {
+              customUrlSection.style.display = provider === 'custom' ? '' : 'none';
+            }
+            const apiKeyField = document.getElementById('api_key_field');
+            if (apiKeyField) {
+              apiKeyField.style.display = preset.needs_key ? '' : 'none';
+            }
+          }
+        }
       });
     </script>
   <?php endif; ?>
