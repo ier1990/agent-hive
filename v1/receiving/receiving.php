@@ -1,13 +1,6 @@
 <?php
-// /web/html/v1/receiving.php
+// /web/html/v1/receiving/receiving.php
 declare(strict_types=1);
-
-// Deprecated: use /v1/inbox.php instead.
-// Keep this file as a compatibility alias so existing clients don't break.
-require __DIR__ . '/inbox.php';
-exit;
-
-
 
 ini_set('log_errors','1');
 ini_set('display_errors','0'); // keep off in prod
@@ -31,7 +24,7 @@ require_once dirname(__DIR__, 2) . '/lib/schema_builder.php';
 require_once dirname(__DIR__, 2) . '/lib/registry_logger.php';
 
 // Enforce API key / IP allowlist and rate limits (defined in bootstrap)
-api_guard_once('receiving', false);
+api_guard_once('receiving', true);
 
 // ---------- Config ----------
 const MAX_BODY_BYTES = 2_000_000; // ~2MB cap (tweak)
