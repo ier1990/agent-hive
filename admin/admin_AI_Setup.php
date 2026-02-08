@@ -136,7 +136,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_valid($_POST['csrf_token'] ?? 
           $pdo = new PDO('sqlite:' . $dbPath, null, null, [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
           ]);
-          $stmt = $pdo->prepare('DELETE FROM saved_profiles WHERE hash = ?');
+          // Ensure schema exists before attempting deletion
+          if (function_exists('ai_saved_profiles_ensure_schema')) {
+            ai_saved_profiles_ensure_schema($pdo);
+          }
+          $stmt = $pdo->prepare('DELETE FROM ai_saved_profiles WHERE hash = ?');
           $stmt->execute([$hash]);
           $success = 'Connection deleted';
         } catch (Throwable $e) {
