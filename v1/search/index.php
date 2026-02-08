@@ -13,17 +13,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
 // --- bootstrap ---
 require_once dirname(__DIR__, 2) . '/lib/bootstrap.php';
 require_once dirname(__DIR__, 2) . '/lib/schema_builder.php';
-api_guard_once('search', false);
+require_once dirname(__DIR__, 2) . '/lib/registry_logger.php';
 
-$ip = $_SERVER['REMOTE_ADDR'] ?? '';
-if ($ip === '192.168.0.210') {$admin = true;} else {$admin = false;}
- 
-if($admin){
-    #display errors for admin
-    ini_set('display_errors', 1);
-    ini_set('display_startup_errors', 1);
-    error_reporting(E_ALL);
-}
+api_guard_once('search', true);
+
+// --- search ---
 
 // ---- env ----
 // Search backend (Searx instance)

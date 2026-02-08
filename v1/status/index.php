@@ -15,7 +15,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') { http_response_code(204);
 // --- bootstrap ---
 require_once dirname(__DIR__, 2) . '/lib/bootstrap.php';
 
-api_guard_once('status', false);
+api_guard_once('status', true);
 
 // Globals from bootstrap
 global $SECURITY_MODE, $requireKeyForAll, $ALLOW_IPS_WITHOUT_KEY;
