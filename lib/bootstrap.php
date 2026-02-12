@@ -177,7 +177,18 @@ if (!defined('API_KEYS_FILE')) {
   define('API_KEYS_FILE', PRIVATE_ROOT . '/api_keys.json');
 }
 
-
+// Auto-create default .env if missing (first-run setup)
+if (!file_exists(APP_ENV_FILE)) {
+    // Ensure PRIVATE_ROOT directory structure exists
+    $privateRoot = dirname(APP_ENV_FILE);
+    if (!is_dir($privateRoot)) {
+        @mkdir($privateRoot, 0755, true);
+    }
+    
+    $defaults = "# Security Mode: lan (trust RFC1918 IPs) or public (require keys for all)\nSECURITY_MODE=lan\n\n# IPs that can access without API key (comma-separated CIDR)\n# Only used in lan mode\nALLOW_IPS_WITHOUT_KEY=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\n\n# Require API key even for allowed IPs (0=no, 1=yes)\nREQUIRE_KEY_FOR_ALL=0\n\n# LLM Backend (set via admin UI or manually)\nLLM_BASE_URL=http://127.0.0.1:1234\nLLM_API_KEY=\nAPP_API_KEY=\n\n# Service Identity\nAPP_VERSION=1.0.0\nAPP_SERVICE_NAME=iernc-api\n";
+    @file_put_contents(APP_ENV_FILE, $defaults);
+    @chmod(APP_ENV_FILE, 0640);
+}
 
 
 
