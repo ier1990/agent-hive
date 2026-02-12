@@ -32,6 +32,9 @@ RewriteRule ^outgoing/([A-Fa-f0-9]{32})$ outgoing.php?req_id=$1  [QSA,NC,L]
 RewriteRule ^answer$                answer.php            [QSA,NC,L]
 RewriteRule ^search$                search.php            [QSA,NC,L]
 
+# Server coordination
+RewriteRule ^servers(?:/(.*))?$     servers/index.php?after=$1 [QSA,NC,L]
+
 # Releases (directory router)
 RewriteRule ^releases(?:/(.*))?$    releases/index.php?after=$1 [QSA,NC,L]
 
