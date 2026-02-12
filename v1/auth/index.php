@@ -36,6 +36,20 @@ if ($method === 'OPTIONS') {
 auth_session_start();
 auth_device_try_login_from_cookie();
 
+// Get client IP for rate limiting
+$client_ip = get_client_ip_trusted();
+
+// Rate limit auth attempts more strictly than normal API
+// 10 attempts per 5 minutes per IP
+[$ok_auth, $rem_auth, $reset_auth] = rl_check("auth:$client_ip", 10, 300);
+if (!$ok_auth) {
+    auth_http_json(429, [
+        'ok' => false,
+        'error' => 'rate_limited',
+        'retry_after' => max(0, $reset_auth - time())
+    ]);
+}
+
 if ($action === 'verify') {
 	if (auth_is_logged_in()) {
 		auth_http_json(200, [
@@ -75,6 +89,19 @@ if ($action === 'login') {
 	$body = auth_read_json_body();
 	$pw = (string)($body['password'] ?? ($_POST['password'] ?? ''));
 
+	// Track failed login attempts per IP (5 failures = 5 min lockout)
+	$attempts_key = "login_fail:$client_ip";
+	[$fail_ok, , ] = rl_check($attempts_key, 5, 300);
+
+	// If at limit, deny immediately
+	if (!$fail_ok) {
+		auth_http_json(429, [
+			'ok' => false,
+			'error' => 'too_many_attempts',
+			'retry_after' => 300
+		]);
+	}
+
 	$admin = auth_read_admin();
 	if (!is_array($admin)) {
 		auth_http_json(400, ['ok' => false, 'error' => 'no_admin_configured']);
@@ -82,8 +109,14 @@ if ($action === 'login') {
 	$user = (string)($admin['username'] ?? 'admin');
 	$hash = (string)($admin['password_hash'] ?? '');
 	if ($hash === '' || !password_verify($pw, $hash)) {
+		// Record failed attempt
+		rl_check($attempts_key, 5, 300); // increment the counter
 		auth_http_json(401, ['ok' => false, 'error' => 'invalid_password']);
 	}
+
+	// Success: clear failed attempts
+	$fail_file = rl_dir() . '/' . rl_key($attempts_key) . '.json';
+	@unlink($fail_file);
 
 	$_SESSION['admin_authed'] = 1;
 	$_SESSION['admin_user'] = $user;
