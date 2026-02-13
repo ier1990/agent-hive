@@ -45,12 +45,22 @@ find "$SRC" -type f \
     # Python wrapper (forwards CLI args via runpy)
     cat > "$dst_file" <<EOF
 #!/usr/bin/env python3
+import os
 import runpy
 import sys
 
 # Execute the original script as __main__ (keeps sys.argv)
-sys.argv[0] = "$src_file"
-runpy.run_path("$src_file", run_name="__main__")
+src_file = "$src_file"
+src_dir = os.path.dirname(src_file)
+
+# Ensure imports resolve to the source tree, not the wrapper directory.
+wrapper_dir = os.path.dirname(__file__)
+if wrapper_dir in sys.path:
+  sys.path.remove(wrapper_dir)
+if src_dir not in sys.path:
+  sys.path.insert(0, src_dir)
+sys.argv[0] = src_file
+runpy.run_path(src_file, run_name="__main__")
 EOF
   elif [[ "$src_file" == *.php ]]; then
     # PHP wrapper (require_once the source - keep PHP environment intact, accept args)
@@ -63,12 +73,12 @@ if (!is_file(\$src)) {
 }
 \$owner = posix_getpwuid(fileowner(\$src))['name'] . ':' . posix_getgrgid(filegroup(\$src))['name'];
 \$perms = substr(sprintf('%o', fileperms(\$src)), -3);
-if (\$owner !== 'samekhi' && \$owner !== 'www-data') {
+if (\$owner !== 'samekhi:www-data') {
   fwrite(STDERR, "Bad owner for \$src: \$owner\n");
   exit(3);
 }
-# Reject if "others" has write bit set
-if (((int)\$perms % 10) & 2) {
+// Reject if "others" has write bit set
+if ((((int)\$perms % 10) & 2) !== 0) {
   fwrite(STDERR, "Refusing world-writable script: \$src perms=\$perms\n");
   exit(4);
 }
@@ -90,8 +100,11 @@ owner="\$(stat -c '%U:%G' "\$SRC")"
 perms="\$(stat -c '%a' "\$SRC")"
 [[ "\$owner" == "samekhi:www-data" ]] || { echo "Bad owner for \$SRC: \$owner" >&2; exit 3; }
 # Reject if "others" has write bit set
-(( (perms % 10) & 2 == 0 )) || { echo "Refusing world-writable script: \$SRC perms=\$perms" >&2; exit 4; }
-exec "\$SRC" "\$@"
+if (( (perms % 10) & 2 )); then
+  echo "Refusing world-writable script: \$SRC perms=\$perms" >&2
+  exit 4
+fi
+exec /bin/bash "\$SRC" "\$@"
 EOF
   else
     # Generic/executable wrapper (with source validation + ownership/perms check)
@@ -104,8 +117,11 @@ owner="\$(stat -c '%U:%G' "\$SRC")"
 perms="\$(stat -c '%a' "\$SRC")"
 [[ "\$owner" == "samekhi:www-data" ]] || { echo "Bad owner for \$SRC: \$owner" >&2; exit 3; }
 # Reject if "others" has write bit set
-(( (perms % 10) & 2 == 0 )) || { echo "Refusing world-writable script: \$SRC perms=\$perms" >&2; exit 4; }
-exec "\$SRC" "\$@"
+if (( (perms % 10) & 2 )); then
+  echo "Refusing world-writable script: \$SRC perms=\$perms" >&2
+  exit 4
+fi
+exec /bin/bash "\$SRC" "\$@"
 EOF
   fi
   
