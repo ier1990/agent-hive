@@ -16,6 +16,7 @@ const REQUIRED_DIRS = [
         '/web/private/logs',
         '/web/private/uploads/memory',
         '/web/private/cache',
+        '/web/private/storage',
 ];
 const MIN_DISK_MB = 100;
 

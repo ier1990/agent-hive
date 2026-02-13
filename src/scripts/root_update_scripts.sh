@@ -67,7 +67,8 @@ if (\$owner !== 'samekhi' && \$owner !== 'www-data') {
   fwrite(STDERR, "Bad owner for \$src: \$owner\n");
   exit(3);
 }
-if ((int)\$perms % 10 >= 2) {
+# Reject if "others" has write bit set
+if (((int)\$perms % 10) & 2) {
   fwrite(STDERR, "Refusing world-writable script: \$src perms=\$perms\n");
   exit(4);
 }
@@ -88,7 +89,8 @@ SRC="$src_file"
 owner="\$(stat -c '%U:%G' "\$SRC")"
 perms="\$(stat -c '%a' "\$SRC")"
 [[ "\$owner" == "samekhi:www-data" ]] || { echo "Bad owner for \$SRC: \$owner" >&2; exit 3; }
-(( perms % 10 < 2 )) || { echo "Refusing world-writable script: \$SRC perms=\$perms" >&2; exit 4; }
+# Reject if "others" has write bit set
+(( (perms % 10) & 2 == 0 )) || { echo "Refusing world-writable script: \$SRC perms=\$perms" >&2; exit 4; }
 exec "\$SRC" "\$@"
 EOF
   else
@@ -101,7 +103,8 @@ SRC="$src_file"
 owner="\$(stat -c '%U:%G' "\$SRC")"
 perms="\$(stat -c '%a' "\$SRC")"
 [[ "\$owner" == "samekhi:www-data" ]] || { echo "Bad owner for \$SRC: \$owner" >&2; exit 3; }
-(( perms % 10 < 2 )) || { echo "Refusing world-writable script: \$SRC perms=\$perms" >&2; exit 4; }
+# Reject if "others" has write bit set
+(( (perms % 10) & 2 == 0 )) || { echo "Refusing world-writable script: \$SRC perms=\$perms" >&2; exit 4; }
 exec "\$SRC" "\$@"
 EOF
   fi
