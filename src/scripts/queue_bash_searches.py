@@ -3,6 +3,7 @@ import os, sys, time, json, sqlite3, datetime, fcntl, urllib.parse, logging
 import urllib.request
 from logging.handlers import RotatingFileHandler
 
+
 from notes_config import get_config, get_private_root
 
 PRIVATE_ROOT = get_private_root(__file__)
@@ -14,9 +15,46 @@ HUMAN_DB = os.path.join(PRIVATE_ROOT, "db/memory/human_notes.db")
 JOB_NAME = "queue_bash_searches"
 
 _CFG = get_config()
-SEARCH_API = _CFG.get("search.api.base", "http://192.168.0.142/v1/search?q=")
+SEARCH_API = _CFG.get("search.api.base", "http://192.168.0.142/v1/search/?q=")
 BATCH = int(os.getenv("BASH_SEARCH_BATCH", "5"))
 SLEEP_SEC = float(os.getenv("BASH_SEARCH_SLEEP", "1"))
+
+
+def _load_api_key_from_file(path: str) -> str:
+    if not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return ""
+        for k, meta in data.items():
+            if not k or not isinstance(meta, dict):
+                continue
+            if meta.get("active") is False:
+                continue
+            scopes = meta.get("scopes")
+            if isinstance(scopes, list) and "tools" in scopes:
+                return str(k)
+    except Exception:
+        return ""
+    return ""
+
+
+def resolve_search_api_key() -> tuple:
+    env_key = os.getenv("SEARCH_API_KEY") or os.getenv("APP_API_KEY")
+    if isinstance(env_key, str) and env_key.strip():
+        return env_key.strip(), "env"
+
+    key_path = os.getenv("API_KEYS_FILE") or os.path.join(PRIVATE_ROOT, "api_keys.json")
+    file_key = _load_api_key_from_file(key_path)
+    if file_key:
+        return file_key, key_path
+
+    return "", ""
+
+
+SEARCH_API_KEY, SEARCH_API_KEY_SRC = resolve_search_api_key()
 
 def now():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -193,10 +231,27 @@ def mark(db: sqlite3.Connection, cmd_id: int, status: str, err: str = None):
 
 def call_search(q: str) -> dict:
     url = SEARCH_API + urllib.parse.quote(q, safe="")
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    headers = {"Accept": "application/json"}
+    if SEARCH_API_KEY:
+        headers["X-API-Key"] = SEARCH_API_KEY
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
         body = resp.read().decode("utf-8", errors="ignore")
         return json.loads(body)
+
+
+def probe_search_api(logger: logging.Logger) -> None:
+    url = SEARCH_API + urllib.parse.quote("ping", safe="")
+    headers = {"Accept": "application/json"}
+    if SEARCH_API_KEY:
+        headers["X-API-Key"] = SEARCH_API_KEY
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            code = getattr(resp, "status", None) or resp.getcode()
+            logger.info("probe api_status=%s api_url=%s", int(code), url)
+    except Exception as e:
+        logger.warning("probe api_error=%s api_url=%s", _truncate(str(e), 200), url)
 
 def main():
     logger = setup_logging()
@@ -225,6 +280,12 @@ def main():
         int(BATCH),
         float(SLEEP_SEC),
     )
+    logger.info(
+        "auth api_key=%s source=%s",
+        "present" if SEARCH_API_KEY else "missing",
+        SEARCH_API_KEY_SRC or "none",
+    )
+    probe_search_api(logger)
 
     try:
         eligible = seed_count(db)

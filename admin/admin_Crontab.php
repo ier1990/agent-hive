@@ -271,6 +271,55 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 			$errors[] = 'Export failed: ' . $t->getMessage();
 		}
 	}
+	if ($action === 'import_defaults' && $db) {
+		try {
+			$defaultsFile = __DIR__ . '/cron_tasks_backup.json';
+			if (!is_file($defaultsFile)) {
+				$errors[] = 'Defaults file not found: ' . $defaultsFile;
+			} else {
+				$jsonContent = file_get_contents($defaultsFile);
+				$tasks = json_decode($jsonContent, true);
+				if (!is_array($tasks)) {
+					$errors[] = 'Invalid JSON in defaults file';
+				} else {
+					$imported = 0;
+					$skipped = 0;
+					$ts = time();
+					foreach ($tasks as $task) {
+						$scriptPath = (string)($task['script_path'] ?? '');
+						$schedule = (string)($task['schedule'] ?? '');
+						$argsText = (string)($task['args_text'] ?? '');
+						$enabled = (int)($task['enabled'] ?? 0);
+						
+						if ($scriptPath === '' || $schedule === '') {
+							$skipped++;
+							continue;
+						}
+						
+						if (!cron_expr_syntax_valid($schedule)) {
+							$errors[] = 'Invalid schedule for ' . basename($scriptPath) . ': ' . $schedule;
+							$skipped++;
+							continue;
+						}
+						
+						$ins = $db->prepare('INSERT INTO cron_tasks (script_path, schedule, args_text, enabled, created_at, updated_at) VALUES (:p,:s,:a,:e,:c,:u) ON CONFLICT(script_path) DO UPDATE SET schedule=excluded.schedule, args_text=excluded.args_text, enabled=excluded.enabled, updated_at=excluded.updated_at');
+						$ins->execute([
+							':p' => $scriptPath,
+							':s' => $schedule,
+							':a' => $argsText,
+							':e' => $enabled,
+							':c' => $ts,
+							':u' => $ts,
+						]);
+						$imported++;
+					}
+					$messages[] = 'Imported ' . $imported . ' task(s) from defaults' . ($skipped > 0 ? ' (' . $skipped . ' skipped)' : '');
+				}
+			}
+		} catch (Throwable $t) {
+			$errors[] = 'Import failed: ' . $t->getMessage();
+		}
+	}
 	if ($action === 'delete_task' && $db) {
 		$taskId = (int)($_POST['task_id'] ?? 0);
 		if ($taskId <= 0) {
@@ -406,6 +455,7 @@ if ($viewRunAs !== 'all') {
 		.ok { color: #0a7a30; }
 		.bad { color: #b00020; }
 		.trunc { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.args-wrap { max-width: 300px; word-wrap: break-word; word-break: break-all; overflow-wrap: break-word; }
 		.msg { margin: 10px 0; padding: 10px 12px; border-radius: 8px; }
 		.msg.ok { background: #eef9f0; border: 1px solid #cde9d3; }
 		.msg.bad { background: #fff4f4; border: 1px solid #ffd1d1; }
@@ -500,14 +550,24 @@ if ($viewRunAs !== 'all') {
 	<div class="box">
 		<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
 			<h2 style="margin:0; font-size:15px;">Scheduled Tasks</h2>
-			<?php if (!empty($tasks)): ?>
-				<form method="post" action="" style="margin:0;">
-					<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
-					<input type="hidden" name="action" value="export_tasks" />
-					<input type="hidden" name="run_as" value="<?php echo e($viewRunAs); ?>" />
-					<button class="btn" type="submit" style="background:#e8f5e9; border-color:#81c784;">💾 Export to JSON Backup</button>
-				</form>
-			<?php endif; ?>
+			<div style="display:flex; gap:8px; flex-wrap:wrap;">
+				<?php if (is_file(__DIR__ . '/cron_tasks_backup.json')): ?>
+					<form method="post" action="" style="margin:0;" onsubmit="return confirm('Import default tasks? This will update/add tasks from the defaults file.');">
+						<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
+						<input type="hidden" name="action" value="import_defaults" />
+						<input type="hidden" name="run_as" value="<?php echo e($viewRunAs); ?>" />
+						<button class="btn" type="submit" style="background:#e3f2fd; border-color:#64b5f6;">📥 Load Defaults</button>
+					</form>
+				<?php endif; ?>
+				<?php if (!empty($tasks)): ?>
+					<form method="post" action="" style="margin:0;">
+						<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
+						<input type="hidden" name="action" value="export_tasks" />
+						<input type="hidden" name="run_as" value="<?php echo e($viewRunAs); ?>" />
+						<button class="btn" type="submit" style="background:#e8f5e9; border-color:#81c784;">💾 Export to JSON Backup</button>
+					</form>
+				<?php endif; ?>
+			</div>
 		</div>
 		<?php if (empty($tasksFiltered)): ?>
 			<div class="muted">No tasks scheduled yet. Use the “Scripts Inventory” section below to add schedules.</div>
@@ -532,7 +592,7 @@ if ($viewRunAs !== 'all') {
 							<td class="trunc"><code title="<?php echo e((string)$t['script_path']); ?>"><?php echo e((string)$t['script_path']); ?></code></td>
 							<td><span class="pill"><?php echo e(run_as_label($ra)); ?></span></td>
 							<td><code><?php echo e((string)$t['schedule']); ?></code></td>
-							<td class="trunc"><code title="<?php echo e((string)($t['args_text'] ?? '')); ?>"><?php echo e((string)($t['args_text'] ?? '')); ?></code></td>
+						<td class="args-wrap"><code><?php echo e((string)($t['args_text'] ?? '')); ?></code></td>
 							<td><?php echo ((int)($t['enabled'] ?? 0) === 1) ? '<span class="ok">yes</span>' : '<span class="bad">no</span>'; ?></td>
 							<td class="small muted"><?php echo !empty($t['last_run_at']) ? e(gmdate('c', (int)$t['last_run_at'])) : '<span class="muted">—</span>'; ?></td>
 							<td><?php

@@ -1,0 +1,68 @@
+[
+    {
+        "script_path": "/web/private/scripts/root_dirperm.sh",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/root_ingest_bash_history.py",
+        "schedule": "@hourly",
+        "args_text": "root",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/enqueue.py",
+        "schedule": "*/5 * * * *",
+        "args_text": "--queue bash --name ingest_bash_history --payload '{\"user\":\"samekhi\"}'",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/ai_notes.py",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/classify_bash_commands.py",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/queue_bash_searches.py",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/ai_search_summ.py",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/sysinfo_local.sh",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/codewalker_cli.php",
+        "schedule": "*/15 * * * *",
+        "args_text": "--action=auto",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/root_update_scripts.sh",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/ingest_bash_history_to_kb.py",
+        "schedule": "@hourly",
+        "args_text": "samekhi",
+        "enabled": 1
+    }
+]

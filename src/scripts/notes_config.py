@@ -22,7 +22,7 @@ from typing import Any, Dict
 DEFAULTS: Dict[str, str] = {
     "ai.ollama.url": "http://192.168.0.142:11434",
     "ai.ollama.model": "gpt-oss:latest",
-    "search.api.base": "http://192.168.0.142/v1/search?q=",
+    "search.api.base": "http://192.168.0.142/v1/search/?q=",
 }
 
 

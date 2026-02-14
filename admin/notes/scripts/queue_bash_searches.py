@@ -14,7 +14,7 @@ HUMAN_DB = os.path.join(PRIVATE_ROOT, "db/memory/human_notes.db")
 JOB_NAME = "queue_bash_searches"
 
 _CFG = get_config()
-SEARCH_API = _CFG.get("search.api.base", "http://192.168.0.142/v1/search?q=")
+SEARCH_API = _CFG.get("search.api.base", "http://192.168.0.142/v1/search/?q=")
 BATCH = int(os.getenv("BASH_SEARCH_BATCH", "5"))
 SLEEP_SEC = float(os.getenv("BASH_SEARCH_SLEEP", "1"))
 
