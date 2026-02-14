@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API="${API:-http://192.168.0.142/v1/inbox}"
+API="${API:-http://127.0.0.1/v1/inbox}"
 DB="${DB:-sysinfo_new}"
 SERVICE="${SERVICE:-daily_sysinfo}"
+
 
 # Optional auth (recommended): export IER_API_KEY="xxxx"
 API_KEY_HEADER=()

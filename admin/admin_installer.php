@@ -258,16 +258,111 @@ function createDirectories() {
     <div class="bg-green-900 border border-green-500 p-6 rounded mb-6">
         <div class="text-2xl mb-2">🎉 Success!</div>
         <p>Environment checks passed and directories created.</p>
-        <p class="mt-4 text-sm">Next steps:</p>
-        <ul class="list-disc ml-6 mt-2 text-sm">
-            <li>Configure .env file at /web/private/.env</li>
-            <li>Set up API keys (IER_API_KEY, OLLAMA_MODEL)</li>
-            <li>Run database migrations if needed</li>
-        </ul>
     </div>
-    <a href="index.php" class="inline-block bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded font-bold">
-        Go to Admin Console
-    </a>
+
+    <h3 class="text-lg font-bold mb-4 mt-8">📋 Required Setup Scripts (Run in Order)</h3>
+    <p class="text-gray-400 mb-6">These scripts must be executed as root/sudo to set up wrapper scripts and permissions:</p>
+
+    <div class="space-y-4 mb-8">
+        <!-- Script 1 -->
+        <div class="bg-gray-800 p-4 rounded border border-gray-700">
+            <div class="flex items-start justify-between">
+                <div>
+                    <div class="font-bold text-yellow-400">1. Create Wrapper Scripts</div>
+                    <div class="text-sm text-gray-400 mt-1">Generates executable wrappers in /web/private/scripts/ for all source scripts</div>
+                    <div class="font-mono bg-gray-900 p-2 rounded mt-2 text-xs text-green-400">
+                        sudo /web/html/src/scripts/root_update_scripts.sh
+                    </div>
+                    <div class="text-xs text-gray-500 mt-2">
+                        Location: <span class="font-mono">/web/html/src/scripts/root_update_scripts.sh</span><br/>
+                        Creates: Wrapper scripts in <span class="font-mono">/web/private/scripts/</span> with proper owner (samekhi:www-data)
+                    </div>
+                </div>
+                <div class="text-3xl">📝</div>
+            </div>
+        </div>
+
+        <!-- Script 2 -->
+        <div class="bg-gray-800 p-4 rounded border border-gray-700">
+            <div class="flex items-start justify-between">
+                <div>
+                    <div class="font-bold text-yellow-400">2. Fix Permissions</div>
+                    <div class="text-sm text-gray-400 mt-1">Sets correct ownership and permissions on source files and directories</div>
+                    <div class="font-mono bg-gray-900 p-2 rounded mt-2 text-xs text-green-400">
+                        sudo /web/html/src/scripts/root_dirperm.sh
+                    </div>
+                    <div class="text-xs text-gray-500 mt-2">
+                        Location: <span class="font-mono">/web/html/src/scripts/root_dirperm.sh</span><br/>
+                        Effects: Source scripts (0644), www-data ownership, secure permissions
+                    </div>
+                </div>
+                <div class="text-3xl">🔐</div>
+            </div>
+        </div>
+
+        <!-- Script 3 -->
+        <div class="bg-gray-800 p-4 rounded border border-gray-700">
+            <div class="flex items-start justify-between">
+                <div>
+                    <div class="font-bold text-yellow-400">3. Initialize Cron Dispatcher (Manual)</div>
+                    <div class="text-sm text-gray-400 mt-1">Add the cron dispatcher task to the system crontab</div>
+                    <div class="font-mono bg-gray-900 p-2 rounded mt-2 text-xs text-green-400">
+                        sudo crontab -e
+                    </div>
+                    <div class="text-xs text-gray-500 mt-2">
+                        Add this line to <span class="font-mono">/etc/crontab</span>:<br/>
+                        <span class="font-mono">* * * * * www-data /web/private/scripts/cron_dispatcher.php</span><br/>
+                        Or use the <strong>Admin Crontab UI</strong> (<a href="admin_Crontab.php" target="_blank" class="text-blue-400">admin_Crontab.php</a>) for future task scheduling
+                    </div>
+                </div>
+                <div class="text-3xl">⏰</div>
+            </div>
+        </div>
+
+        <!-- Script 4 -->
+        <div class="bg-gray-800 p-4 rounded border border-gray-700">
+            <div class="flex items-start justify-between">
+                <div>
+                    <div class="font-bold text-yellow-400">4. Initialize Bash History Ingestion</div>
+                    <div class="text-sm text-gray-400 mt-1">Set up hourly bash history ingestion using the Admin Crontab UI</div>
+                    <div class="font-mono bg-gray-900 p-2 rounded mt-2 text-xs text-green-400">
+                        Open <a href="admin_Crontab.php" target="_blank" class="text-blue-400 underline">admin_Crontab.php</a> and add:
+                    </div>
+                    <div class="text-xs text-gray-500 mt-2">
+                        Add these <strong>@hourly</strong> cron jobs via the Web UI:<br/>
+                        <div class="font-mono bg-gray-900 p-2 rounded mt-1">
+                            @hourly /web/private/scripts/root_ingest_bash_history.py root<br/>
+                            @hourly /web/private/scripts/ingest_bash_history_to_kb.py samekhi
+                        </div>
+                        Navigate to <strong>Admin Crontab</strong> → Add each job with @hourly frequency
+                    </div>
+                </div>
+                <div class="text-3xl">📜</div>
+            </div>
+        </div>
+    </div>
+
+    <h3 class="text-lg font-bold mb-4 mt-8">⚙️ Post-Installation Configuration</h3>
+    <div class="space-y-3 text-sm">
+        <div class="text-gray-400">
+            <strong>• Configure .env file</strong> at <span class="font-mono">/web/private/.env</span> with API keys and settings
+        </div>
+        <div class="text-gray-400">
+            <strong>• Set up API keys:</strong> IER_API_KEY, OLLAMA_MODEL, etc.
+        </div>
+        <div class="text-gray-400">
+            <strong>• Manage cron tasks:</strong> Use <a href="admin_Crontab.php" class="text-blue-400">Admin Crontab</a> UI to add/edit recurring jobs
+        </div>
+        <div class="text-gray-400">
+            <strong>• Check health:</strong> Visit <a href="/v1/health" class="text-blue-400">/v1/health</a> to verify API is running
+        </div>
+    </div>
+
+    <div class="mt-8">
+        <a href="index.php" class="inline-block bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded font-bold">
+            Go to Admin Console
+        </a>
+    </div>
 <?php endif; ?>
 
 <div class="mt-6">

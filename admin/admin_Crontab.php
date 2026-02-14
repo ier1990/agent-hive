@@ -257,6 +257,20 @@ try {
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 	csrf_check();
 	$action = (string)($_POST['action'] ?? '');
+	if ($action === 'export_tasks' && $db) {
+		try {
+			$exportTasks = $db->query('SELECT script_path, schedule, args_text, enabled FROM cron_tasks ORDER BY enabled DESC, id ASC')->fetchAll(PDO::FETCH_ASSOC);
+			$backupFile = rtrim($privateRoot, "/\\") . '/cron_tasks_backup.json';
+			$jsonData = json_encode($exportTasks, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+			if (file_put_contents($backupFile, $jsonData) !== false) {
+				$messages[] = 'Exported ' . count($exportTasks) . ' task(s) to ' . $backupFile;
+			} else {
+				$errors[] = 'Failed to write backup file: ' . $backupFile;
+			}
+		} catch (Throwable $t) {
+			$errors[] = 'Export failed: ' . $t->getMessage();
+		}
+	}
 	if ($action === 'delete_task' && $db) {
 		$taskId = (int)($_POST['task_id'] ?? 0);
 		if ($taskId <= 0) {
@@ -484,7 +498,17 @@ if ($viewRunAs !== 'all') {
 	<?php endforeach; ?>
 
 	<div class="box">
-		<h2 style="margin:0 0 6px 0; font-size:15px;">Scheduled Tasks</h2>
+		<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+			<h2 style="margin:0; font-size:15px;">Scheduled Tasks</h2>
+			<?php if (!empty($tasks)): ?>
+				<form method="post" action="" style="margin:0;">
+					<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
+					<input type="hidden" name="action" value="export_tasks" />
+					<input type="hidden" name="run_as" value="<?php echo e($viewRunAs); ?>" />
+					<button class="btn" type="submit" style="background:#e8f5e9; border-color:#81c784;">💾 Export to JSON Backup</button>
+				</form>
+			<?php endif; ?>
+		</div>
 		<?php if (empty($tasksFiltered)): ?>
 			<div class="muted">No tasks scheduled yet. Use the “Scripts Inventory” section below to add schedules.</div>
 		<?php else: ?>
