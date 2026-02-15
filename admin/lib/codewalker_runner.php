@@ -34,6 +34,13 @@ function cw_cwdb_init(PDO $pdo): void
         last_hash TEXT
     )');
 
+    // Migration: ensure last_hash column exists (added later, may be missing on older DBs)
+    try {
+        $pdo->exec('ALTER TABLE files ADD COLUMN last_hash TEXT');
+    } catch (PDOException $e) {
+        // Column already exists or other constraint issue, ignore
+    }
+
     $pdo->exec('CREATE TABLE IF NOT EXISTS runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         started_at TEXT,
@@ -58,6 +65,13 @@ function cw_cwdb_init(PDO $pdo): void
         error TEXT,
         created_at TEXT
     )');
+
+    // Migration: ensure run_id column exists (added later, may be missing on older DBs)
+    try {
+        $pdo->exec('ALTER TABLE actions ADD COLUMN run_id INTEGER');
+    } catch (PDOException $e) {
+        // Column already exists, ignore
+    }
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS summaries (
         action_id INTEGER PRIMARY KEY,
