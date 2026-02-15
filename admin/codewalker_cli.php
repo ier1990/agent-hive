@@ -1,6 +1,7 @@
 #!/usr/bin/env php
 <?php
 
+
 declare(strict_types=1);
 
 // Load core bootstrap for env() and other helpers
@@ -58,56 +59,101 @@ foreach ($argv as $i => $a) {
 // If no paths provided, auto-scan from config
 if (!$paths) {
     $cfg = cw_settings_get_all();
+    $mode = strtolower(trim((string)($cfg['mode'] ?? 'cron')));
     $scanPath = rtrim((string)($cfg['scan_path'] ?? ''), '/');
     $fileTypes = (array)($cfg['file_types'] ?? ['php', 'py', 'sh', 'log']);
     $excludeDirs = (array)($cfg['exclude_dirs'] ?? []);
     $limit = (int)($cfg['limit_per_run'] ?? 5);
+    $dbPath = (string)($cfg['db_path'] ?? '');
     
-    if ($scanPath === '' || !is_dir($scanPath)) {
-        fwrite(STDERR, "No scan_path configured or not a directory: $scanPath\n");
-        exit(2);
+    // Load queued files first (used in both modes)
+    $queuedPaths = [];
+    if ($dbPath !== '' && is_file($dbPath)) {
+        try {
+            $pdo = cw_cwdb_pdo($dbPath);
+            $stmt = $pdo->query("SELECT path FROM queued_files WHERE status='pending' ORDER BY id ASC");
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as $row) {
+                if (isset($row['path']) && is_file($row['path'])) {
+                    $queuedPaths[] = $row['path'];
+                }
+            }
+        } catch (Throwable $e) {
+            // Queued files table may not exist yet, continue
+        }
     }
     
-    fwrite(STDOUT, "Auto-scanning: $scanPath (limit: $limit, types: " . implode(',', $fileTypes) . ")\n");
-    
-    // Collect all matching files (not just first N)
-    $candidates = [];
-    $iterator = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($scanPath, RecursiveDirectoryIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::SELF_FIRST
-    );
-    
-    foreach ($iterator as $file) {
-        if (!$file->isFile()) continue;
-        $path = $file->getPathname();
+    // mode=que: only run queued work; if nothing queued, exit early (pause behavior)
+    if ($mode === 'que' || $mode === 'queue') {
+        if (empty($queuedPaths)) {
+            fwrite(STDOUT, "Mode=que: no pending queued files; exiting.\n");
+            exit(0);
+        }
+        $paths = array_slice($queuedPaths, 0, $limit);
+        fwrite(STDOUT, "Mode=que: processing " . count($paths) . " queued files\n");
+    } else {
+        // mode=cron (default): scan filesystem and prioritize queued work first
+        if ($scanPath === '' || !is_dir($scanPath)) {
+            fwrite(STDERR, "No scan_path configured or not a directory: $scanPath\n");
+            exit(2);
+        }
         
-        // Check excludes
-        $skip = false;
-        foreach ($excludeDirs as $excl) {
-            $excl = trim((string)$excl, '/');
-            if ($excl !== '' && strpos($path, '/' . $excl . '/') !== false) {
-                $skip = true;
-                break;
+        fwrite(STDOUT, "Mode=cron: scanning $scanPath (limit: $limit, types: " . implode(',', $fileTypes) . ")\n");
+        
+        // Collect all matching files (not just first N)
+        $candidates = [];
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($scanPath, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+        
+        foreach ($iterator as $file) {
+            if (!$file->isFile()) continue;
+            $path = $file->getPathname();
+            
+            // Check excludes
+            $skip = false;
+            foreach ($excludeDirs as $excl) {
+                $excl = trim((string)$excl, '/');
+                if ($excl !== '' && strpos($path, '/' . $excl . '/') !== false) {
+                    $skip = true;
+                    break;
+                }
+            }
+            if ($skip) continue;
+            
+            // Check file type
+            $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            if (!in_array($ext, $fileTypes, true)) continue;
+            
+            $candidates[] = $path;
+        }
+        
+        if (empty($candidates) && empty($queuedPaths)) {
+            fwrite(STDOUT, "No files found to process.\n");
+            exit(0);
+        }
+        
+        // Prioritize queued files first, then add scanned files
+        $seen = [];
+        $prioritized = [];
+        foreach ($queuedPaths as $p) {
+            $prioritized[] = $p;
+            $seen[realpath($p) ?: $p] = true;
+        }
+        
+        // Randomize scanned files and add unseen ones
+        shuffle($candidates);
+        foreach ($candidates as $p) {
+            $rp = realpath($p) ?: $p;
+            if (!isset($seen[$rp])) {
+                $prioritized[] = $p;
             }
         }
-        if ($skip) continue;
         
-        // Check file type
-        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        if (!in_array($ext, $fileTypes, true)) continue;
-        
-        $candidates[] = $path;
+        $paths = array_slice($prioritized, 0, $limit);
+        fwrite(STDOUT, "Found " . count($paths) . " files to process (" . count($queuedPaths) . " queued)\n");
     }
-    
-    if (empty($candidates)) {
-        fwrite(STDOUT, "No files found to process.\n");
-        exit(0);
-    }
-    
-    // Randomize and take first N (this gives different files each run)
-    shuffle($candidates);
-    $paths = array_slice($candidates, 0, $limit);
-    fwrite(STDOUT, "Found " . count($paths) . " files to process\n");
 }
 
 $exit = 0;
