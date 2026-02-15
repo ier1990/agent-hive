@@ -73,6 +73,13 @@ function cw_cwdb_init(PDO $pdo): void
         // Column already exists, ignore
     }
 
+    // Migration: ensure error column exists (added later, may be missing on older DBs)
+    try {
+        $pdo->exec('ALTER TABLE actions ADD COLUMN error TEXT');
+    } catch (PDOException $e) {
+        // Column already exists, ignore
+    }
+
     $pdo->exec('CREATE TABLE IF NOT EXISTS summaries (
         action_id INTEGER PRIMARY KEY,
         summary TEXT
