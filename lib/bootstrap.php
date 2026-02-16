@@ -129,15 +129,43 @@ if (!defined('WEB_ROOT')) {
     define('WEB_ROOT', APP_ROOT);
   } 
 }
+
+if (!function_exists('normalize_path_for_compare')) {
+  function normalize_path_for_compare($path) {
+    $p = (string)$path;
+    $p = str_replace('\\', '/', $p);
+    $p = rtrim($p, '/');
+    return $p === '' ? '/' : $p;
+  }
+}
+
+if (!function_exists('path_is_within')) {
+  function path_is_within($candidate, $parent) {
+    $candidateN = normalize_path_for_compare($candidate);
+    $parentN = normalize_path_for_compare($parent);
+    if ($candidateN === $parentN) return true;
+    return strpos($candidateN . '/', $parentN . '/') === 0;
+  }
+}
+
 // ------------------------------------------------------------
 // PRIVATE_ROOT (filesystem-only, writable, never web-served)
 // Priority:
+//  0) APP_PRIVATE_ROOT env var if set (can be used for first-run paths)
 //  1) /web/private if it exists
 //  2) /var/www/private if it exists
 // Else: hard fail (deployment must be smarter)
 // ------------------------------------------------------------
 if (!defined('PRIVATE_ROOT')) {
-  if (is_dir('/web/private')) {
+  $envPrivateRoot = getenv('APP_PRIVATE_ROOT');
+  if ($envPrivateRoot === false || $envPrivateRoot === '') {
+    $envPrivateRoot = $_ENV['APP_PRIVATE_ROOT'] ?? ($_SERVER['APP_PRIVATE_ROOT'] ?? '');
+  }
+
+  if (is_string($envPrivateRoot) && trim($envPrivateRoot) !== '') {
+    define('PRIVATE_ROOT', rtrim(trim($envPrivateRoot), '/\\'));
+
+  } elseif (is_dir('/web/private')) {
     define('PRIVATE_ROOT', '/web/private');
 
   } elseif (is_dir('/var/www/private')) {
@@ -153,6 +181,32 @@ if (!defined('PRIVATE_ROOT')) {
     ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
     exit;
   }
+}
+
+if (path_is_within(PRIVATE_ROOT, WEB_ROOT)) {
+  http_response_code(500);
+  header('Content-Type: application/json; charset=utf-8');
+  echo json_encode([
+    'ok' => false,
+    'error' => 'server_misconfigured',
+    'message' => 'PRIVATE_ROOT must be outside WEB_ROOT',
+    'web_root' => WEB_ROOT,
+    'private_root' => PRIVATE_ROOT
+  ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+// Defense-in-depth: if private data is ever exposed by path mapping,
+// ensure Apache denies direct access.
+$privateHtaccess = rtrim(PRIVATE_ROOT, '/\\') . '/.htaccess';
+if (!file_exists($privateHtaccess)) {
+  $denyRules = "<IfModule mod_authz_core.c>\n"
+    . "  Require all denied\n"
+    . "</IfModule>\n"
+    . "<IfModule !mod_authz_core.c>\n"
+    . "  Deny from all\n"
+    . "</IfModule>\n";
+  @file_put_contents($privateHtaccess, $denyRules, LOCK_EX);
 }
 
 // PRIVATE_SCRIPTS

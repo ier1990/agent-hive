@@ -23,14 +23,19 @@ When editing PHP, assume **PHP 7.3**:
 - `v1/`: API endpoints and apps (generally `v1/<route>/index.php`)
 - `admin/`: admin tools (protected pages)
 - `src/`: version-controlled scripts and notes that get deployed to private runtime
-- `/web/private` (not in git): SQLite DBs, logs, keys, caches, rate limit state
+- `/web/private` (not in git, never web-served): SQLite DBs, logs, keys, caches, rate limit state
 
 ## Security / secrets
 
-- Never commit anything from `/web/private` (DBs, `.env`, keys, logs, caches).
+- **MUST:** `APP_PRIVATE_ROOT` (default `/web/private`) must be outside the web document root.
+- **MUST:** Web server configuration must deny all requests to any `private/` path (defense-in-depth).
+- **MUST NOT:** Commit secrets, DBs, logs, caches, or uploads from `APP_PRIVATE_ROOT`.
+- **SHOULD:** Add a startup self-check that refuses to boot if private root is inside docroot.
+- Runtime defense-in-depth: `lib/bootstrap.php` auto-creates `APP_PRIVATE_ROOT/.htaccess` with deny rules when missing.
 - Auth patterns:
   - Admin pages use `lib/auth/auth.php`.
-  - API routes use API keys / scopes and rate limiting (see `lib/bootstrap.php`).
+  - Admin entrypoints should call `auth_require_admin()`.
+  - API routes use API keys / scopes and rate limiting (see `lib/bootstrap.php`), and should call `api_guard()`.
 
 ## “Operationally boring” change policy
 
