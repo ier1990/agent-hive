@@ -459,14 +459,14 @@ function renderAiSetup(array &$errors, ?SQLite3 $notesDb): string {
 	}
 
 	$h .= '<h3 style="margin:14px 0 8px 0;">Scripts</h3>';
-	$h .= '<div class="muted" style="margin-bottom:8px;">Hourly bash history ingest:</div>';
-	$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
-		. htmlspecialchars('/web/html/admin/notes/scripts/ingest_bash_history_to_kb.py', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
-		. '</pre>';
-	$h .= '<div class="muted" style="margin:10px 0 8px 0;">Example cron (run for each user you care about):</div>';
-	$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
-		. htmlspecialchars("5 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/ingest_bash_history_to_kb.py samekhi >> /web/private/logs/ingest_bash_history_to_kb.log 2>&1\n7 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/ingest_bash_history_to_kb.py root  >> /web/private/logs/ingest_bash_history_to_kb.log 2>&1", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
-		. '</pre>';
+		$h .= '<div class="muted" style="margin-bottom:8px;">Consolidated hourly pipeline (recommended):</div>';
+		$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
+			. htmlspecialchars('/web/private/scripts/root_process_bash_history.py', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+			. '</pre>';
+		$h .= '<div class="muted" style="margin:10px 0 8px 0;">Example cron (single entry):</div>';
+		$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
+			. htmlspecialchars("5 * * * * /usr/bin/python3 /web/private/scripts/root_process_bash_history.py >> /web/private/logs/process_bash_history.log 2>&1", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+			. '</pre>';
 
 	$classifyScript = '/web/html/admin/notes/scripts/classify_bash_commands.py';
 	$h .= '<div style="margin-top:14px;">';

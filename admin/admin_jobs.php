@@ -137,12 +137,10 @@ $autoRefresh = isset($_GET['refresh']) ? (int)$_GET['refresh'] : 0;
                 <div class="muted mt-4">
                     <strong>Expected cron jobs:</strong>
                     <ul class="list-disc ml-6 mt-2 space-y-1">
-                        <li>save_bash_history_threaded.py (hourly)</li>
-                        <li>ingest_bash_history_to_kb.py (hourly)</li>
-                        <li>ai_notes.py (hourly)</li>
-                        <li>classify_bash_commands.py (hourly)</li>
-                        <li>queue_bash_searches.py (hourly)</li>
-                        <li>ai_search_summ.py (hourly)</li>
+                        <li>root_process_bash_history.py (hourly, consolidated)</li>
+                        <li>process_bash_history (job_runs heartbeat)</li>
+                        <li>ingest_bash_history_to_kb:* (subjobs per user)</li>
+                        <li>classify_bash_commands / queue_bash_searches / ai_search_summ / ai_notes (subjobs)</li>
                     </ul>
                 </div>
             <?php else: ?>

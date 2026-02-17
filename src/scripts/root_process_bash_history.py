@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Root-only wrapper for ingest_bash_history_to_kb.py.
+"""Root-only wrapper for process_bash_history.py.
 
-Keeps the root_ prefix policy while avoiding duplicated ingest logic.
+Use this as the single cron-dispatcher task when root access is required.
+
+# CRON: 5 * * * *
 """
 
 from __future__ import annotations
@@ -13,10 +15,10 @@ import sys
 
 def main() -> int:
     if hasattr(os, "geteuid") and os.geteuid() != 0:
-        print("root_ingest_bash_history.py must run as root", file=sys.stderr)
+        print("root_process_bash_history.py must run as root", file=sys.stderr)
         return 1
 
-    target = os.path.join(os.path.dirname(__file__), "ingest_bash_history_to_kb.py")
+    target = os.path.join(os.path.dirname(__file__), "process_bash_history.py")
     cmd = [sys.executable, target] + sys.argv[1:]
     return int(subprocess.call(cmd))
 

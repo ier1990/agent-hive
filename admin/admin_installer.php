@@ -329,12 +329,11 @@ function createDirectories() {
                         Open <a href="admin_Crontab.php" target="_blank" class="text-blue-400 underline">admin_Crontab.php</a> and add:
                     </div>
                     <div class="text-xs text-gray-500 mt-2">
-                        Add these <strong>@hourly</strong> cron jobs via the Web UI:<br/>
+                        Add this <strong>@hourly</strong> cron job via the Web UI:<br/>
                         <div class="font-mono bg-gray-900 p-2 rounded mt-1">
-                            @hourly /web/private/scripts/root_ingest_bash_history.py root<br/>
-                            @hourly /web/private/scripts/ingest_bash_history_to_kb.py samekhi
+                            @hourly /web/private/scripts/root_process_bash_history.py
                         </div>
-                        Navigate to <strong>Admin Crontab</strong> → Add each job with @hourly frequency
+                        Navigate to <strong>Admin Crontab</strong> → Add one root_ job with @hourly frequency
                     </div>
                 </div>
                 <div class="text-3xl">📜</div>

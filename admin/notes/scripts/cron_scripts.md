@@ -16,46 +16,37 @@ This is the “keep track of everything” list for the Notes pipeline.
 - AI metadata DB: `/web/private/db/memory/notes_ai_metadata.db`
 - Search cache DB (written by Search API): `/web/private/db/memory/search_cache.db`
 
-## Script pipeline
+## Script pipeline (single orchestrator)
 
-1) Ingest bash history → bash_history.db (+ heartbeat)
-- `/web/html/admin/notes/scripts/ingest_bash_history_to_kb.py <user>`
+Primary cron target:
+- `/web/private/scripts/root_process_bash_history.py`
 
-2) Classify commands with Ollama → bash_history.db (+ heartbeat)
-- `/web/html/admin/notes/scripts/classify_bash_commands.py`
+It runs these scripts in order:
+1) `/web/private/scripts/ingest_bash_history_to_kb.py samekhi`
+2) `/web/private/scripts/ingest_bash_history_to_kb.py root`
+3) `/web/private/scripts/classify_bash_commands.py`
+4) `/web/private/scripts/queue_bash_searches.py`
+5) `/web/private/scripts/ai_search_summ.py`
+6) `/web/private/scripts/ai_notes.py`
 
-3) Queue “known” commands to Search API (+ heartbeat)
-- `/web/html/admin/notes/scripts/queue_bash_searches.py`
+All individual scripts remain callable for manual debugging.
 
-4) Summarize cached searches → search_cache.db + ai_generated notes (+ heartbeat)
-- `/web/html/admin/notes/scripts/ai_search_summ.py`
+## Example cron / dispatcher setup
 
-5) Generate metadata for notes → notes_ai_metadata.db (+ heartbeat)
-- `/web/html/admin/notes/scripts/ai_notes.py`
-
-## Example crontab
-
-These lines assume python is at `/usr/bin/python3` and logs go to `/web/private/logs/`.
+Single root-only schedule:
 
 ```cron
-# ingest bash history into bash_history.db
-5 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/ingest_bash_history_to_kb.py samekhi >> /web/private/logs/ingest_bash_history_to_kb.log 2>&1
-7 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/ingest_bash_history_to_kb.py root   >> /web/private/logs/ingest_bash_history_to_kb.log 2>&1
+5 * * * * /usr/bin/python3 /web/private/scripts/root_process_bash_history.py >> /web/private/logs/process_bash_history.log 2>&1
+```
 
-# classify commands
-15 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/classify_bash_commands.py >> /web/private/logs/classify_bash_commands.log 2>&1
+Optional: run source directly (same behavior):
 
-# queue searches
-25 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/queue_bash_searches.py >> /web/private/logs/queue_bash_searches.log 2>&1
-
-# summarize search cache
-35 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/ai_search_summ.py >> /web/private/logs/ai_search_summ.log 2>&1
-
-# ai metadata for notes
-45 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/ai_notes.py >> /web/private/logs/ai_notes.cron.log 2>&1
+```cron
+5 * * * * /usr/bin/python3 /web/html/src/scripts/root_process_bash_history.py >> /web/private/logs/process_bash_history.log 2>&1
 ```
 
 ## Notes
 
 - The search cache + search summaries only advance on the host that runs `/v1/search` (because that’s where `search_cache.db` is written).
 - `?view=jobs` reads `job_runs` from `human_notes.db` and shows the last start/ok/error + duration for each script.
+- `process_bash_history` also writes its own `job_runs` heartbeat row for top-level pipeline visibility.

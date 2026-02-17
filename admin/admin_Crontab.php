@@ -26,6 +26,13 @@ function cron_task_run_as(string $scriptPath): string
 	return (strpos($base, 'root_') === 0) ? 'root' : 'samekhi';
 }
 
+function cron_task_log_file(string $scriptPath): string
+{
+	$base = basename($scriptPath);
+	$logBase = preg_replace('/[^a-zA-Z0-9._-]+/', '_', $base);
+	return 'cron_' . $logBase . '.log';
+}
+
 function run_as_label(string $runAs): string
 {
 	if ($runAs === 'root') return 'root';
@@ -603,13 +610,20 @@ if ($viewRunAs !== 'all') {
 								else echo '<span class="muted">—</span>';
 							?></td>
 							<td>
-								<form method="post" action="" style="margin:0;" onsubmit="return confirm('Delete this scheduled task?');">
-									<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
-									<input type="hidden" name="action" value="delete_task" />
-									<input type="hidden" name="task_id" value="<?php echo e((string)($t['id'] ?? '')); ?>" />
-									<input type="hidden" name="run_as" value="<?php echo e($viewRunAs); ?>" />
-									<button class="btn" type="submit" style="background:#fff4f4;">Delete</button>
-								</form>
+								<?php
+									$logFile = cron_task_log_file((string)($t['script_path'] ?? ''));
+									$logUrl = '/admin/admin_logs.php?action=tail&file=' . rawurlencode($logFile) . '&lines=50';
+								?>
+								<div style="display:flex; gap:8px; align-items:center;">
+									<a class="btn" href="<?php echo e($logUrl); ?>">View Logs</a>
+									<form method="post" action="" style="margin:0;" onsubmit="return confirm('Delete this scheduled task?');">
+										<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
+										<input type="hidden" name="action" value="delete_task" />
+										<input type="hidden" name="task_id" value="<?php echo e((string)($t['id'] ?? '')); ?>" />
+										<input type="hidden" name="run_as" value="<?php echo e($viewRunAs); ?>" />
+										<button class="btn" type="submit" style="background:#fff4f4;">Delete</button>
+									</form>
+								</div>
 							</td>
 						</tr>
 					<?php endforeach; ?>
