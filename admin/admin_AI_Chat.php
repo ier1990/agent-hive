@@ -1,7 +1,7 @@
 <?php
 // Admin AI Chat (AI-friendly UI)
 // Uses shared AI settings (admin_AI_Setup.php / lib/ai_bootstrap.php)
-// and AI_Header payload templates (admin_AI_Headers.php).
+// and AI template payloads (admin_AI_Templates.php).
 
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
@@ -11,6 +11,7 @@ if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
 
 require_once dirname(__DIR__) . '/lib/bootstrap.php';
 require_once __DIR__ . '/AI_Header/AI_Header.php';
+require_once APP_LIB . '/ai_templates.php';
 
 $IS_EMBED = in_array(strtolower($_GET['embed'] ?? ''), ['1','true','yes'], true);
 $EMBED_QS = $IS_EMBED ? '?embed=1' : '';
@@ -28,47 +29,15 @@ function csrf_ok_ai_chat($t){
 }
 
 function ai_header_db_path(): string {
-  $root = defined('PRIVATE_ROOT') ? (string)PRIVATE_ROOT : '/web/private';
-  return rtrim($root, "/\\") . '/db/memory/ai_header.db';
+  return ai_templates_db_path();
 }
 
 function ai_header_list_template_names(string $type = 'payload'): array {
-  $path = ai_header_db_path();
-  if (!is_file($path)) return [];
-
-  $out = [];
-  try {
-    $db = new SQLite3($path);
-    $stmt = $db->prepare('SELECT name FROM ai_header_templates WHERE type = :type ORDER BY name ASC');
-    $stmt->bindValue(':type', $type, SQLITE3_TEXT);
-    $res = $stmt->execute();
-    while ($res && ($row = $res->fetchArray(SQLITE3_ASSOC))) {
-      $name = (string)($row['name'] ?? '');
-      if ($name !== '') $out[] = $name;
-    }
-    $db->close();
-  } catch (Throwable $t) {
-    return [];
-  }
-
-  return $out;
+  return ai_templates_list_names($type);
 }
 
 function ai_header_get_template_text_by_name(string $name): string {
-  $path = ai_header_db_path();
-  if (!is_file($path)) return '';
-
-  try {
-    $db = new SQLite3($path);
-    $stmt = $db->prepare('SELECT template_text FROM ai_header_templates WHERE name = :name LIMIT 1');
-    $stmt->bindValue(':name', $name, SQLITE3_TEXT);
-    $res = $stmt->execute();
-    $row = $res ? $res->fetchArray(SQLITE3_ASSOC) : null;
-    $db->close();
-    return is_array($row) ? (string)($row['template_text'] ?? '') : '';
-  } catch (Throwable $t) {
-    return '';
-  }
+  return ai_templates_get_text_by_name($name, 'payload');
 }
 
 function ai_chat_history_to_messages(array $hist): array {
@@ -378,7 +347,7 @@ $lastDebug = is_array($_SESSION['ai_chat_last_debug']) ? $_SESSION['ai_chat_last
       </div>
       <div class="flex flex-wrap gap-2">
         <a class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" href="admin_AI_Setup.php?popup=1&amp;postmessage=1&amp;return=admin_AI_Chat.php<?= $IS_EMBED ? '%3Fembed%3D1' : '' ?>" target="_blank">AI Setup…</a>
-        <a class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" href="admin_AI_Headers.php" target="_blank">AI Headers</a>
+        <a class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" href="admin_AI_Templates.php" target="_blank">AI Templates</a>
         <a class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" href="admin_API_Chat.php" target="_blank">API Chat Tester</a>
       </div>
     </div>

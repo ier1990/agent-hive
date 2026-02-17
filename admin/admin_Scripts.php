@@ -26,7 +26,7 @@ function ai_header_get_template_text_by_name(string $name): string {
   $path = ai_header_db_path();
   if (!is_file($path)) return '';
   $db = new SQLite3($path);
-  // Table is created by /admin/AI_Header/index.php or /admin/admin_AI_Headers.php.
+  // Table is created by /admin/AI_Header/index.php or /admin/admin_AI_Templates.php.
   $stmt = $db->prepare('SELECT template_text FROM ai_header_templates WHERE name = :name LIMIT 1');
   $stmt->bindValue(':name', $name, SQLITE3_TEXT);
   $res = $stmt->execute();
@@ -738,7 +738,7 @@ $fl = flashes();
         <p class="text-sm opacity-90">Indexed Scripts with editable docs & generated summaries</p>
       </div>
       <div class="flex flex-wrap gap-2 justify-end">
-        <a href="admin_AI_Headers.php" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-md text-sm whitespace-nowrap">AI Headers</a>
+        <a href="admin_AI_Templates.php" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-md text-sm whitespace-nowrap">AI Templates</a>
         <a href="admin_AI_Setup.php<?php echo $IS_EMBED?'?embed=1':''; ?>" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-md text-sm whitespace-nowrap">AI Setup</a>
         <a href="admin_Crontab.php" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-md text-sm whitespace-nowrap">Crontab</a>
         <a href="admin_Scripts.php<?php echo $IS_EMBED?'?embed=1':''; ?>" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-md text-sm whitespace-nowrap">Home</a>
@@ -988,8 +988,6 @@ if (!empty($DEBUG)) {
 }
 
 ?>
-
-
 
 
 

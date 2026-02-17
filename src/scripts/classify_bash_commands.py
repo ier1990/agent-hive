@@ -84,6 +84,7 @@ from logging.handlers import RotatingFileHandler
 from typing import Dict, Any, List, Tuple
 
 from notes_config import get_config, get_private_root
+from ai_templates import compile_payload_by_name, payload_to_chat_parts
 
 PRIVATE_ROOT = get_private_root(__file__)
 KB_DB = os.path.join(PRIVATE_ROOT, "db/memory/bash_history.db")
@@ -333,7 +334,7 @@ def local_ai_classify(full_cmd: str, base_cmd: str) -> Dict[str, Any]:
     Default implementation uses Ollama CLI (local).
     If you use an HTTP endpoint, swap this function.
     """
-    prompt = f"""You are a bash command classifier.
+    fallback_prompt = f"""You are a bash command classifier.
 
 Return ONLY valid JSON (no markdown, no extra text).
 Schema:
@@ -356,6 +357,29 @@ full_cmd: {full_cmd}
 base_cmd_guess: {base_cmd}
 """
 
+    template_name = os.getenv("AI_TEMPLATE_BASH_CLASSIFIER", "Bash Command Classifier")
+    compiled = compile_payload_by_name(
+        template_name,
+        {
+            "full_cmd": full_cmd,
+            "base_cmd": base_cmd,
+        },
+        template_type="payload",
+    )
+    payload_tpl = compiled.get("payload") if isinstance(compiled, dict) else {}
+    sys_text, user_text, options, _stream = payload_to_chat_parts(payload_tpl, "", fallback_prompt)
+    if not isinstance(options, dict):
+        options = {}
+    if "temperature" not in options:
+        options["temperature"] = 0
+
+    prompt_parts = []
+    if isinstance(sys_text, str) and sys_text.strip():
+        prompt_parts.append(sys_text.strip())
+    if isinstance(user_text, str) and user_text.strip():
+        prompt_parts.append(user_text.strip())
+    prompt = "\n\n".join(prompt_parts).strip() or fallback_prompt
+
     ollama_url = os.getenv("OLLAMA_URL", OLLAMA_URL_DEFAULT).rstrip("/")
     api_url = f"{ollama_url}/api/generate"
 
@@ -363,9 +387,7 @@ base_cmd_guess: {base_cmd}
         "model": MODEL,
         "prompt": prompt,
         "stream": False,
-        "options": {
-            "temperature": 0,
-        },
+        "options": options,
     }
 
     try:

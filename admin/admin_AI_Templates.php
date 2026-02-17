@@ -510,8 +510,15 @@ try {
 
   if (ai_header_ensure_template($db, $storageDir, 'Scripts KB - HTML Help', 'payload', $tplScriptsHtml)) $added++;
   if (ai_header_ensure_template($db, $storageDir, 'Scripts KB - Markdown Help', 'payload', $tplScriptsMd)) $added++;
+
+  $tplNotesMetadata = "system: |\n  You generate metadata for an internal LAN-only notes system.\n  Return ONLY a single JSON object. No markdown, no code fences, no extra text.\n  Schema:\n  {\n    \"doc_kind\": \"bash_history|sysinfo|manual_pdf|bios_pdf|general_note|code|reminder|passwords|links|images|files|tags|other\",\n    \"summary\": \"1-2 sentence summary\",\n    \"tags\": [\"tag1\",\"tag2\"],\n    \"entities\": [\"asus\",\"x570\",\"tpm\",\"secure boot\"],\n    \"commands\": [\"systemctl restart ollama\",\"apt-get install ...\"],\n    \"cmd_families\": [\"systemctl\",\"apt\",\"docker\",\"ufw\",\"journalctl\"],\n    \"sensitivity\": \"normal|sensitive\"\n  }\n  Rules:\n  - tags/entities/commands/cmd_families must be arrays (can be empty).\n  - If note looks like bash history or logs, extract commands.\n  - If note looks like a manual/pdf, set doc_kind accordingly.\n  - If note_type is 'passwords', set sensitivity='sensitive' and keep summary minimal.\n\nuser: |\n  note_id: {{ note.id }}\n  parent_id: {{ note.parent_id }}\n  notes_type: {{ note.notes_type }}\n  topic: {{ note.topic }}\n  created_at: {{ note.created_at }}\n  updated_at: {{ note.updated_at }}\n\n  NOTE CONTENT:\n  {{ note.note }}\n\noptions:\n  temperature: 0.2\n\nstream: false\n";
+
+  $tplBashClassify = "system: |\n  You are a bash command classifier.\n  Return ONLY valid JSON (no markdown, no extra text).\n  Schema:\n  {\n    \"base_cmd\": string,\n    \"known\": boolean,\n    \"intent\": string,\n    \"keywords\": [string,...],\n    \"search_query\": string|null,\n    \"notes\": string\n  }\n  Rules:\n  - base_cmd should be the first real command (skip leading 'sudo' and env assignments).\n  - If you are not confident, set known=false and search_query=null.\n  - search_query should be a good web query to learn what the command does.\n\nuser: |\n  Command:\n  full_cmd: {{ full_cmd }}\n  base_cmd_guess: {{ base_cmd }}\n\noptions:\n  temperature: 0\n\nstream: false\n";
+
+  if (ai_header_ensure_template($db, $storageDir, 'Notes Metadata', 'payload', $tplNotesMetadata)) $added++;
+  if (ai_header_ensure_template($db, $storageDir, 'Bash Command Classifier', 'payload', $tplBashClassify)) $added++;
   if ($added > 0) {
-    $messages[] = "Added {$added} required template(s) (Scripts KB).";
+    $messages[] = "Added {$added} required template(s).";
   }
 } catch (Throwable $t) {
   // best-effort
@@ -768,7 +775,7 @@ if ($action === 'class') {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
-  <title>Admin · AI Headers</title>
+  <title>Admin · AI Templates</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 18px; color: #111; }
     .top { display:flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -797,14 +804,14 @@ if ($action === 'class') {
 <body>
   <div class="top">
     <div>
-      <h1 style="margin:0">AI Headers = Sheet Music</h1>
-      <div class="muted">AI Headers are sheet music.<BR>
+      <h1 style="margin:0">AI Templates = Sheet Music</h1>
+      <div class="muted">AI Templates are sheet music.<BR>
 The Conductor turns them into a performance.<BR>
 ”Templates compiled into model-ready headers</div>
     </div>
     <div>
       <a class="btn" href="?action=class">Class</a>
-      <a class="btn primary" href="?action=new">New Header</a>
+      <a class="btn primary" href="?action=new">New Template</a>
       <a class="btn primary" href="?action=help">Help</a>
 		<a class="btn" href="?action=export_all">Export All</a>
     </div>

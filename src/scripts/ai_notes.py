@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from notes_config import get_config, get_private_root
+from ai_templates import compile_payload_by_name, payload_to_chat_parts
 
 PRIVATE_ROOT = get_private_root(__file__)
 HUMAN_DB_DEFAULT = os.path.join(PRIVATE_ROOT, "db/memory/human_notes.db")
@@ -210,7 +211,7 @@ def call_ollama_metadata(
     """
     Calls Ollama /api/chat and forces strict JSON output.
     """
-    system = (
+    default_system = (
         "You generate metadata for an internal LAN-only notes system.\n"
         "Return ONLY a single JSON object. No markdown, no code fences, no extra text.\n"
         "Schema:\n"
@@ -230,7 +231,7 @@ def call_ollama_metadata(
         "- If note_type is 'passwords', set sensitivity='sensitive' and keep summary minimal.\n"
     )
 
-    user = (
+    default_user = (
         f"note_id: {note.id}\n"
         f"parent_id: {note.parent_id}\n"
         f"notes_type: {note.notes_type}\n"
@@ -241,17 +242,37 @@ def call_ollama_metadata(
         f"{note.note}\n"
     )
 
+    template_name = os.getenv("AI_TEMPLATE_NOTES_METADATA", "Notes Metadata")
+    compiled = compile_payload_by_name(
+        template_name,
+        {
+            "note": {
+                "id": note.id,
+                "parent_id": note.parent_id,
+                "notes_type": note.notes_type,
+                "topic": note.topic,
+                "created_at": note.created_at,
+                "updated_at": note.updated_at,
+                "note": note.note,
+            }
+        },
+        template_type="payload",
+    )
+    payload_tpl = compiled.get("payload") if isinstance(compiled, dict) else {}
+    system, user, options, stream = payload_to_chat_parts(payload_tpl, default_system, default_user)
+    if not isinstance(options, dict):
+        options = {}
+    if "temperature" not in options:
+        options["temperature"] = 0.2
+
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "stream": False,
-        "options": {
-            # keep it deterministic-ish for metadata
-            "temperature": 0.2,
-        },
+        "stream": bool(stream),
+        "options": options,
     }
 
     r = requests.post(f"{ollama_url}/api/chat", json=payload, timeout=timeout_s)

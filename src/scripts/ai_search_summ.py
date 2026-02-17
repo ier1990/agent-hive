@@ -26,6 +26,7 @@ from typing import Any, List
 import requests
 
 from notes_config import get_config, get_private_root
+from ai_templates import compile_payload_by_name, payload_to_chat_parts
 
 PRIVATE_ROOT = get_private_root(__file__)
 _CFG = get_config()
@@ -217,7 +218,7 @@ def load_pending_searches(search_conn: sqlite3.Connection, limit: int, since_id:
 
 
 def call_ollama_search_summary(ollama_url: str, model: str, row: SearchRow, timeout_s: int) -> str:
-    system = (
+    default_system = (
         "You summarize cached web search results for an internal notes system.\n"
         "Be concise and actionable. Output PLAIN TEXT only.\n"
         "Include: 1-2 sentence overview, then 3-7 bullet points of key findings.\n"
@@ -225,7 +226,7 @@ def call_ollama_search_summary(ollama_url: str, model: str, row: SearchRow, time
     )
 
     top = "\n".join([f"- {u}" for u in row.top_urls[:15]])
-    user = (
+    default_user = (
         f"search_cache_id: {row.id}\n"
         f"cached_at: {row.cached_at}\n"
         f"query: {row.q}\n\n"
@@ -235,14 +236,35 @@ def call_ollama_search_summary(ollama_url: str, model: str, row: SearchRow, time
         f"{row.body}\n"
     )
 
+    template_name = os.getenv("AI_TEMPLATE_SEARCH_SUMMARY", "Search Summary")
+    compiled = compile_payload_by_name(
+        template_name,
+        {
+            "row": {
+                "id": row.id,
+                "cached_at": row.cached_at,
+                "q": row.q,
+                "body": row.body,
+                "top_urls_formatted": top,
+            }
+        },
+        template_type="payload",
+    )
+    payload_tpl = compiled.get("payload") if isinstance(compiled, dict) else {}
+    system, user, options, stream = payload_to_chat_parts(payload_tpl, default_system, default_user)
+    if not isinstance(options, dict):
+        options = {}
+    if "temperature" not in options:
+        options["temperature"] = 0.2
+
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "stream": False,
-        "options": {"temperature": 0.2},
+        "stream": bool(stream),
+        "options": options,
     }
 
     r = requests.post(f"{ollama_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_s)
