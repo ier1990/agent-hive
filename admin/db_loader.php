@@ -12,7 +12,7 @@ auth_require_admin();
 
 // ---- Config ----
 define('AGENT_DB_PATH', PRIVATE_ROOT . '/db/agent_tools.db');
-define('TOOLS_JSON_PATH', PRIVATE_ROOT . '/config/agent_tools.json');
+define('TOOLS_JSON_PATH', __DIR__ . '/defaults/agent_tools.json');
 
 // ---- Database Setup ----
 
@@ -261,6 +261,51 @@ if ($action !== '') {
         exit;
     }
     
+    if ($action === 'upload_json' && $method === 'POST') {
+        if (!isset($_FILES['json_file']) || $_FILES['json_file']['error'] !== UPLOAD_ERR_OK) {
+            echo json_encode(['ok' => false, 'error' => 'No file uploaded or upload error']);
+            exit;
+        }
+        
+        $file = $_FILES['json_file'];
+        if ($file['type'] !== 'application/json') {
+            echo json_encode(['ok' => false, 'error' => 'File must be JSON type']);
+            exit;
+        }
+        
+        $raw = @file_get_contents($file['tmp_name']);
+        if (!is_string($raw) || $raw === '') {
+            echo json_encode(['ok' => false, 'error' => 'Cannot read uploaded file']);
+            exit;
+        }
+        
+        $data = json_decode($raw, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            echo json_encode(['ok' => false, 'error' => 'Invalid JSON: ' . json_last_error_msg()]);
+            exit;
+        }
+        
+        $tools = $data['tools'] ?? $data;
+        if (!is_array($tools)) {
+            echo json_encode(['ok' => false, 'error' => 'JSON must contain a "tools" array']);
+            exit;
+        }
+        
+        $loaded = 0;
+        $errors = [];
+        foreach ($tools as $tool) {
+            $r = upsert_tool($tool);
+            if ($r['ok']) {
+                $loaded++;
+            } else {
+                $errors[] = ($tool['name'] ?? '?') . ': ' . ($r['error'] ?? 'unknown');
+            }
+        }
+        
+        echo json_encode(['ok' => true, 'loaded' => $loaded, 'errors' => $errors]);
+        exit;
+    }
+    
     if ($action === 'export') {
         $tools = list_tools();
         // Get full code for each
@@ -432,10 +477,12 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
             <p><strong>Tools loaded:</strong> <?= count($tools) ?></p>
             
             <div class="btn-group">
-                <button class="btn btn-primary" onclick="loadFromJson()">📥 Load from JSON</button>
+                <button class="btn btn-primary" onclick="loadFromJson()">📥 Load Defaults</button>
+                <button class="btn btn-secondary" onclick="importJsonFile()">📂 Import JSON File</button>
                 <button class="btn btn-secondary" onclick="openEditor()">➕ Add Tool</button>
                 <button class="btn btn-secondary" onclick="exportTools()">📤 Export All</button>
             </div>
+            <input type="file" id="json-file-input" style="display:none" accept=".json" onchange="handleJsonFileUpload(event)">
         </div>
         
         <div class="card">
@@ -673,6 +720,51 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
         
         function exportTools() {
             window.open('?action=export', '_blank');
+        }
+        
+        function importJsonFile() {
+            document.getElementById('json-file-input').click();
+        }
+        
+        async function handleJsonFileUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            if (!file.type.includes('json') && !file.name.endsWith('.json')) {
+                toast('Please select a JSON file', 'error');
+                e.target.value = '';
+                return;
+            }
+            
+            if (!confirm(`Import tools from "${file.name}"? This will update existing tools with same name.`)) {
+                e.target.value = '';
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('action', 'upload_json');
+            formData.append('json_file', file);
+            
+            try {
+                const resp = await fetch('?', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await resp.json();
+                if (data.ok) {
+                    toast(`Imported ${data.loaded} tools`, 'success');
+                    if (data.errors.length > 0) {
+                        console.warn('Import errors:', data.errors);
+                    }
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    toast(data.error || 'Import failed', 'error');
+                }
+            } catch (err) {
+                toast('Error: ' + err.message, 'error');
+            } finally {
+                e.target.value = '';
+            }
         }
     </script>
 </body>

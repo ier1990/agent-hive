@@ -280,7 +280,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 	}
 	if ($action === 'import_defaults' && $db) {
 		try {
-			$defaultsFile = __DIR__ . '/cron_tasks_backup.json';
+			$defaultsFile = __DIR__ . '/defaults/cron_tasks_backup.json';
 			if (!is_file($defaultsFile)) {
 				$errors[] = 'Defaults file not found: ' . $defaultsFile;
 			} else {
@@ -558,7 +558,7 @@ if ($viewRunAs !== 'all') {
 		<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
 			<h2 style="margin:0; font-size:15px;">Scheduled Tasks</h2>
 			<div style="display:flex; gap:8px; flex-wrap:wrap;">
-				<?php if (is_file(__DIR__ . '/cron_tasks_backup.json')): ?>
+				<?php if (is_file(__DIR__ . '/defaults/cron_tasks_backup.json')): ?>
 					<form method="post" action="" style="margin:0;" onsubmit="return confirm('Import default tasks? This will update/add tasks from the defaults file.');">
 						<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
 						<input type="hidden" name="action" value="import_defaults" />
