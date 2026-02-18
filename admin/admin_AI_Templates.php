@@ -193,6 +193,20 @@ function normalize_import_templates($decoded): array
   return [];
 }
 
+function upload_error_text($code): string
+{
+  $c = (int)$code;
+  if ($c === UPLOAD_ERR_OK) return 'OK';
+  if ($c === UPLOAD_ERR_INI_SIZE) return 'File exceeds upload_max_filesize.';
+  if ($c === UPLOAD_ERR_FORM_SIZE) return 'File exceeds MAX_FILE_SIZE form limit.';
+  if ($c === UPLOAD_ERR_PARTIAL) return 'File was only partially uploaded.';
+  if ($c === UPLOAD_ERR_NO_FILE) return 'No file was uploaded.';
+  if ($c === UPLOAD_ERR_NO_TMP_DIR) return 'Missing temporary upload directory.';
+  if ($c === UPLOAD_ERR_CANT_WRITE) return 'Failed to write file to disk.';
+  if ($c === UPLOAD_ERR_EXTENSION) return 'A PHP extension stopped the upload.';
+  return 'Unknown upload error.';
+}
+
 function ai_header_allowed_types(): array
 {
   return ['header', 'payload', 'text'];
@@ -418,49 +432,64 @@ if ($count === 0) {
   if ($restored > 0) {
     $messages[] = "Restored {$restored} template(s) from JSON backups.";
   } else {
-    // Hardcoded first-install defaults (captured from currently running scripts/templates)
-    $defaults = [
-      [
-        'name' => 'Header',
-        'type' => 'header',
-        'tpl_b64' => 'QXV0aG9yaXphdGlvbjogQmVhcmVyIHt7IGFwaV9rZXkgfX0NClgtTW9kZWw6IHt7IG1vZGVsIH19DQpYLVNlc3Npb246IHt7IHNlc3Npb24uaWQgfX0NClgtQ2xpZW50OiB7eyBjbGllbnQgfX0NCkNvbnRlbnQtVHlwZTogYXBwbGljYXRpb24vanNvbg0K',
-      ],
-      [
-        'name' => 'Ollama Headers',
-        'type' => 'header',
-        'tpl_b64' => 'Q29udGVudC1UeXBlOiBhcHBsaWNhdGlvbi9qc29uDQpYLU1vZGVsOiB7eyBtb2RlbCB9fQ0KWC1DbGllbnQ6IERvbWFpbk1lbW9yeS9TZWFyY2hTdW1tYXJ5DQpYLVRpbWVvdXQ6IHt7IHRpbWVvdXRfcyB9fQ==',
-      ],
-      [
-        'name' => 'Search Summary',
-        'type' => 'payload',
-        'tpl_b64' => 'c3lzdGVtOiB8DQogIFlvdSBzdW1tYXJpemUgY2FjaGVkIHdlYiBzZWFyY2ggcmVzdWx0cyBmb3IgYW4gaW50ZXJuYWwgbm90ZXMgc3lzdGVtLg0KICBCZSBjb25jaXNlIGFuZCBhY3Rpb25hYmxlLiBPdXRwdXQgUExBSU4gVEVYVCBvbmx5Lg0KICBJbmNsdWRlOiAxLTIgc2VudGVuY2Ugb3ZlcnZpZXcsIHRoZW4gMy03IGJ1bGxldCBwb2ludHMgb2Yga2V5IGZpbmRpbmdzLg0KICBJZiBjb250ZW50IGxvb2tzIGxpa2UgYSBiYWNrZW5kIGVycm9yIHBhZ2Ugb3IgZW1wdHkgcmVzcG9uc2UsIHNheSBzbyBjbGVhcmx5Lg0KDQp1c2VyOiB8DQogIHNlYXJjaF9jYWNoZV9pZDoge3sgcm93LmlkIH19DQogIGNhY2hlZF9hdDoge3sgcm93LmNhY2hlZF9hdCB9fQ0KICBxdWVyeToge3sgcm93LnEgfX0NCg0KICBUT1BfVVJMUzoNCiAge3sgcm93LnRvcF91cmxzX2Zvcm1hdHRlZCB9fQ0KDQogIFJBV19TRUFSQ0hfSlNPTjoNCiAge3sgcm93LmJvZHkgfX0NCg0Kb3B0aW9uczoNCiAgdGVtcGVyYXR1cmU6IDAuMg0KDQpzdHJlYW06IGZhbHNl',
-      ],
-      [
-        'name' => 'Default Chat',
-        'type' => 'payload',
-        'tpl_b64' => 'c3lzdGVtOiB8CiAgWW91IGFyZSBhIGhlbHBmdWwgYXNzaXN0YW50IHJ1bm5pbmcgb24gYSBwcml2YXRlIExBTi1maXJzdCBzeXN0ZW0uCgpwcm9tcHQ6IHwKICB7eyBwcm9tcHQgfX0K',
-      ],
-      [
-        'name' => 'Summarize Notes',
-        'type' => 'payload',
-        'tpl_b64' => 'c3lzdGVtOiB8CiAgU3VtbWFyaXplIHRoZSBwcm92aWRlZCBub3RlcyBjbGVhcmx5IGFuZCBjb25jaXNlbHkuCgpjb250ZXh0OiB8CiAge3sgYXR0YWNobWVudHMgfX0KCnByb21wdDogfAogIHt7IHByb21wdCB9fQo=',
-      ],
-      [
-        'name' => 'Extract Tasks',
-        'type' => 'payload',
-        'tpl_b64' => 'c3lzdGVtOiB8CiAgRXh0cmFjdCBhY3Rpb25hYmxlIHRhc2tzIGFzIGEgYnVsbGV0IGxpc3QuCgpjb250ZXh0OiB8CiAge3sgYXR0YWNobWVudHMgfX0KCnByb21wdDogfAogIHt7IHByb21wdCB9fQo=',
-      ],
-      [
-        'name' => 'default',
-        'type' => 'payload',
-        'tpl_b64' => 'c3lzdGVtOiB8CiAge3sgc3lzdGVtIH19CgoKcGVyc29uYTogfAogIHt7IHBlcnNvbmEgfX0KCm9iamVjdGl2ZToKICB0YXNrX3R5cGU6IHt7IHRhc2tfdHlwZSB9fQogIHN1Y2Nlc3NfY3JpdGVyaWE6IHt7IHN1Y2Nlc3NfY3JpdGVyaWEgfX0KCmNvbnRleHQ6CiAgcHJlX3Byb21wdDogfAoge3sgcHJlX3Byb21wdCB9fQogIGF0dGFjaG1lbnRzOiB8CiAge3sgYXR0YWNobWVudHMgfX0KCnByb21wdDogfAogIHt7IHByb21wdCB9fQoKY29uc3RyYWludHM6CiAgdG9uZToge3sgdG9uZSB9fQogIHZlcmJvc2l0eToge3sgdmVyYm9zaXR5IH19CgplbmdpbmU6CiAgcHJvdmlkZXI6IHt7IHByb3ZpZGVyIH19CiAgbW9kZWw6IHt7IG1vZGVsIH19',
-      ],
-      [
-        'name' => 'Plain Text (webpage compiler)',
-        'type' => 'text',
-        'tpl' => "{{ html }}\n",
-      ],
-    ];
+    // Try to load defaults from external JSON file
+    $defaultsFile = __DIR__ . '/defaults/templates_ai_headers.json';
+    $defaults = [];
+    if (is_file($defaultsFile) && is_readable($defaultsFile)) {
+      $json = @file_get_contents($defaultsFile);
+      if ($json !== false) {
+        $decoded = json_decode($json, true);
+        if (is_array($decoded)) {
+          $defaults = $decoded['templates'] ?? $decoded;
+        }
+      }
+    }
+    
+    // Fall back to hardcoded defaults if file not found or invalid
+    if (empty($defaults)) {
+      $defaults = [
+        [
+          'name' => 'Header',
+          'type' => 'header',
+          'tpl_b64' => 'QXV0aG9yaXphdGlvbjogQmVhcmVyIHt7IGFwaV9rZXkgfX0NClgtTW9kZWw6IHt7IG1vZGVsIH19DQpYLVNlc3Npb246IHt7IHNlc3Npb24uaWQgfX0NClgtQ2xpZW50OiB7eyBjbGllbnQgfX0NCkNvbnRlbnQtVHlwZTogYXBwbGljYXRpb24vanNvbg0K',
+        ],
+        [
+          'name' => 'Ollama Headers',
+          'type' => 'header',
+          'tpl_b64' => 'Q29udGVudC1UeXBlOiBhcHBsaWNhdGlvbi9qc29uDQpYLU1vZGVsOiB7eyBtb2RlbCB9fQ0KWC1DbGllbnQ6IERvbWFpbk1lbW9yeS9TZWFyY2hTdW1tYXJ5DQpYLVRpbWVvdXQ6IHt7IHRpbWVvdXRfcyB9fQ==',
+        ],
+        [
+          'name' => 'Search Summary',
+          'type' => 'payload',
+          'tpl_b64' => 'c3lzdGVtOiB8DQogIFlvdSBzdW1tYXJpemUgY2FjaGVkIHdlYiBzZWFyY2ggcmVzdWx0cyBmb3IgYW4gaW50ZXJuYWwgbm90ZXMgc3lzdGVtLg0KICBCZSBjb25jaXNlIGFuZCBhY3Rpb25hYmxlLiBPdXRwdXQgUExBSU4gVEVYVCBvbmx5Lg0KICBJbmNsdWRlOiAxLTIgc2VudGVuY2Ugb3ZlcnZpZXcsIHRoZW4gMy03IGJ1bGxldCBwb2ludHMgb2Yga2V5IGZpbmRpbmdzLg0KICBJZiBjb250ZW50IGxvb2tzIGxpa2UgYSBiYWNrZW5kIGVycm9yIHBhZ2Ugb3IgZW1wdHkgcmVzcG9uc2UsIHNheSBzbyBjbGVhcmx5Lg0KDQp1c2VyOiB8DQogIHNlYXJjaF9jYWNoZV9pZDoge3sgcm93LmlkIH19DQogIGNhY2hlZF9hdDoge3sgcm93LmNhY2hlZF9hdCB9fQ0KICBxdWVyeToge3sgcm93LnEgfX0NCg0KICBUT1BfVVJMUzoNCiAge3sgcm93LnRvcF91cmxzX2Zvcm1hdHRlZCB9fQ0KDQogIFJBV19TRUFSQ0hfSlNPTjoNCiAge3sgcm93LmJvZHkgfX0NCg0Kb3B0aW9uczoNCiAgdGVtcGVyYXR1cmU6IDAuMg0KDQpzdHJlYW06IGZhbHNl',
+        ],
+        [
+          'name' => 'Default Chat',
+          'type' => 'payload',
+          'tpl_b64' => 'c3lzdGVtOiB8CiAgWW91IGFyZSBhIGhlbHBmdWwgYXNzaXN0YW50IHJ1bm5pbmcgb24gYSBwcml2YXRlIExBTi1maXJzdCBzeXN0ZW0uCgpwcm9tcHQ6IHwKICB7eyBwcm9tcHQgfX0K',
+        ],
+        [
+          'name' => 'Summarize Notes',
+          'type' => 'payload',
+          'tpl_b64' => 'c3lzdGVtOiB8CiAgU3VtbWFyaXplIHRoZSBwcm92aWRlZCBub3RlcyBjbGVhcmx5IGFuZCBjb25jaXNlbHkuCgpjb250ZXh0OiB8CiAge3sgYXR0YWNobWVudHMgfX0KCnByb21wdDogfAogIHt7IHByb21wdCB9fQo=',
+        ],
+        [
+          'name' => 'Extract Tasks',
+          'type' => 'payload',
+          'tpl_b64' => 'c3lzdGVtOiB8CiAgRXh0cmFjdCBhY3Rpb25hYmxlIHRhc2tzIGFzIGEgYnVsbGV0IGxpc3QuCgpjb250ZXh0OiB8CiAge3sgYXR0YWNobWVudHMgfX0KCnByb21wdDogfAogIHt7IHByb21wdCB9fQo=',
+        ],
+        [
+          'name' => 'default',
+          'type' => 'payload',
+          'tpl_b64' => 'c3lzdGVtOiB8CiAge3sgc3lzdGVtIH19CgoKcGVyc29uYTogfAogIHt7IHBlcnNvbmEgfX0KCm9iamVjdGl2ZToKICB0YXNrX3R5cGU6IHt7IHRhc2tfdHlwZSB9fQogIHN1Y2Nlc3NfY3JpdGVyaWE6IHt7IHN1Y2Nlc3NfY3JpdGVyaWEgfX0KCmNvbnRleHQ6CiAgcHJlX3Byb21wdDogfAoge3sgcHJlX3Byb21wdCB9fQogIGF0dGFjaG1lbnRzOiB8CiAge3sgYXR0YWNobWVudHMgfX0KCnByb21wdDogfAogIHt7IHByb21wdCB9fQoKY29uc3RyYWludHM6CiAgdG9uZToge3sgdG9uZSB9fQogIHZlcmJvc2l0eToge3sgdmVyYm9zaXR5IH19CgplbmdpbmU6CiAgcHJvdmlkZXI6IHt7IHByb3ZpZGVyIH19CiAgbW9kZWw6IHt7IG1vZGVsIH19',
+        ],
+        [
+          'name' => 'Plain Text (webpage compiler)',
+          'type' => 'text',
+          'tpl' => "{{ html }}\n",
+        ],
+      ];
+    }
 
     $ins = $db->prepare('INSERT INTO ai_header_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
     foreach ($defaults as $d) {
@@ -561,15 +590,35 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
   if ($postAction === 'import') {
     try {
-      if (!isset($_FILES['import_file']) || !is_array($_FILES['import_file'])) {
-        throw new RuntimeException('No file uploaded.');
+      $defaultImportPath = __DIR__ . '/defaults/templates_ai_headers.json';
+      $source = trim((string)($_POST['import_source'] ?? 'upload'));
+      $raw = '';
+
+      if ($source === 'defaults') {
+        if (!is_readable($defaultImportPath)) {
+          throw new RuntimeException('Defaults file not found: ' . $defaultImportPath);
+        }
+        $raw = (string)@file_get_contents($defaultImportPath);
+      } else {
+        if (!isset($_FILES['import_file']) || !is_array($_FILES['import_file'])) {
+          throw new RuntimeException('No file uploaded.');
+        }
+        $f = $_FILES['import_file'];
+        $uploadErr = (int)($f['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($uploadErr !== UPLOAD_ERR_OK) {
+          // Fallback to defaults file if present to keep onboarding smooth.
+          if (is_readable($defaultImportPath)) {
+            $raw = (string)@file_get_contents($defaultImportPath);
+            $messages[] = 'Upload failed (' . upload_error_text($uploadErr) . '). Imported defaults file instead.';
+          } else {
+            throw new RuntimeException('Upload error: ' . upload_error_text($uploadErr) . ' (code ' . $uploadErr . ')');
+          }
+        } else {
+          $tmp = (string)($f['tmp_name'] ?? '');
+          $raw = (string)@file_get_contents($tmp);
+        }
       }
-      $f = $_FILES['import_file'];
-      if (($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-        throw new RuntimeException('Upload error.');
-      }
-      $tmp = (string)($f['tmp_name'] ?? '');
-      $raw = @file_get_contents($tmp);
+
       if (!is_string($raw) || trim($raw) === '') {
         throw new RuntimeException('Empty upload.');
       }
@@ -855,10 +904,18 @@ The Conductor turns them into a performance.<BR>
     <form method="post" action="?" enctype="multipart/form-data" style="margin: 0 0 12px 0; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
       <input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
       <input type="hidden" name="action" value="import" />
+      <input type="hidden" name="import_source" value="upload" />
       <label style="margin:0; font-weight:600;">Import JSON</label>
       <input type="file" name="import_file" accept="application/json" />
       <button class="btn" type="submit">Import</button>
       <span class="muted">Accepts a single template JSON, an array, or {"templates": [...]}</span>
+    </form>
+    <form method="post" action="?" style="margin: 0 0 12px 0; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+      <input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
+      <input type="hidden" name="action" value="import" />
+      <input type="hidden" name="import_source" value="defaults" />
+      <button class="btn" type="submit">Import Defaults</button>
+      <span class="muted">Loads <code>admin/defaults/templates_ai_headers.json</code></span>
     </form>
 
       <table>

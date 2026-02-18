@@ -1,0 +1,107 @@
+{
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Simple echo tool - returns whatever you send it",
+      "keywords": "echo, test, ping, hello",
+      "language": "php",
+      "parameters_schema": {
+        "message": "string"
+      },
+      "code": "return ['echo' => $params['message'] ?? 'Hello from AgentHive!', 'timestamp' => date('c')];",
+      "is_approved": 1
+    },
+    {
+      "name": "math_eval",
+      "description": "Safely evaluate a mathematical expression",
+      "keywords": "math, calculate, eval, expression, add, subtract, multiply, divide",
+      "language": "php",
+      "parameters_schema": {
+        "expression": "string"
+      },
+      "code": "$expr = $params['expression'] ?? '';\nif (!preg_match('/^[0-9+\\-*\\/().\\s]+$/', $expr)) {\n    return ['error' => 'Invalid expression - only numbers and basic operators allowed'];\n}\ntry {\n    $result = eval('return ' . $expr . ';');\n    return ['expression' => $expr, 'result' => $result];\n} catch (Throwable $e) {\n    return ['error' => $e->getMessage()];\n}",
+      "is_approved": 1
+    },
+    {
+      "name": "system_info",
+      "description": "Get basic system information",
+      "keywords": "system, info, status, server, memory, disk, uptime",
+      "language": "php",
+      "parameters_schema": {},
+      "code": "return [\n    'hostname' => gethostname(),\n    'php_version' => PHP_VERSION,\n    'os' => PHP_OS,\n    'memory_usage' => round(memory_get_usage(true) / 1024 / 1024, 2) . ' MB',\n    'disk_free' => round(disk_free_space('/') / 1024 / 1024 / 1024, 2) . ' GB',\n    'load_avg' => sys_getloadavg(),\n    'timestamp' => date('c'),\n];",
+      "is_approved": 1
+    },
+    {
+      "name": "json_format",
+      "description": "Pretty-print and validate JSON",
+      "keywords": "json, format, pretty, validate, parse",
+      "language": "php",
+      "parameters_schema": {
+        "json": "string"
+      },
+      "code": "$input = $params['json'] ?? '';\n$decoded = json_decode($input, true);\nif (json_last_error() !== JSON_ERROR_NONE) {\n    return ['valid' => false, 'error' => json_last_error_msg()];\n}\nreturn ['valid' => true, 'formatted' => json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)];",
+      "is_approved": 1
+    },
+    {
+      "name": "string_utils",
+      "description": "String manipulation utilities",
+      "keywords": "string, text, uppercase, lowercase, reverse, length, count",
+      "language": "php",
+      "parameters_schema": {
+        "text": "string",
+        "operation": "string (uppercase|lowercase|reverse|length|wordcount)"
+      },
+      "code": "$text = $params['text'] ?? '';\n$op = strtolower($params['operation'] ?? 'length');\n$result = null;\nswitch ($op) {\n    case 'uppercase': $result = strtoupper($text); break;\n    case 'lowercase': $result = strtolower($text); break;\n    case 'reverse': $result = strrev($text); break;\n    case 'length': $result = strlen($text); break;\n    case 'wordcount': $result = str_word_count($text); break;\n    default: return ['error' => 'Unknown operation: ' . $op];\n}\nreturn ['input' => $text, 'operation' => $op, 'result' => $result];",
+      "is_approved": 1
+    },
+    {
+      "name": "datetime_info",
+      "description": "Get date/time information and conversions",
+      "keywords": "date, time, datetime, timezone, unix, timestamp, now, today",
+      "language": "php",
+      "parameters_schema": {
+        "timestamp": "optional unix timestamp or datetime string",
+        "timezone": "optional timezone like UTC, America/New_York"
+      },
+      "code": "$ts = $params['timestamp'] ?? null;\n$tz = $params['timezone'] ?? 'UTC';\ntry {\n    $dtz = new DateTimeZone($tz);\n} catch (Exception $e) {\n    $dtz = new DateTimeZone('UTC');\n    $tz = 'UTC';\n}\nif ($ts === null) {\n    $dt = new DateTime('now', $dtz);\n} elseif (is_numeric($ts)) {\n    $dt = (new DateTime())->setTimestamp((int)$ts)->setTimezone($dtz);\n} else {\n    $dt = new DateTime($ts, $dtz);\n}\nreturn [\n    'iso8601' => $dt->format('c'),\n    'unix' => $dt->getTimestamp(),\n    'formatted' => $dt->format('Y-m-d H:i:s T'),\n    'timezone' => $tz,\n    'day_of_week' => $dt->format('l'),\n    'week_of_year' => (int)$dt->format('W'),\n];",
+      "is_approved": 1
+    },
+    {
+      "name": "hash_text",
+      "description": "Generate hash of text using various algorithms",
+      "keywords": "hash, md5, sha1, sha256, checksum, digest",
+      "language": "php",
+      "parameters_schema": {
+        "text": "string",
+        "algorithm": "optional: md5, sha1, sha256 (default)"
+      },
+      "code": "$text = $params['text'] ?? '';\n$algo = strtolower($params['algorithm'] ?? 'sha256');\n$allowed = ['md5', 'sha1', 'sha256', 'sha384', 'sha512'];\nif (!in_array($algo, $allowed, true)) {\n    return ['error' => 'Invalid algorithm. Use: ' . implode(', ', $allowed)];\n}\nreturn ['algorithm' => $algo, 'hash' => hash($algo, $text), 'length' => strlen($text)];",
+      "is_approved": 1
+    },
+    {
+      "name": "random_generate",
+      "description": "Generate random values - strings, numbers, UUIDs",
+      "keywords": "random, generate, uuid, password, string, number",
+      "language": "php",
+      "parameters_schema": {
+        "type": "string (string|number|uuid|hex)",
+        "length": "optional length for strings (default 16)"
+      },
+      "code": "$type = strtolower($params['type'] ?? 'string');\n$len = max(1, min(256, (int)($params['length'] ?? 16)));\nswitch ($type) {\n    case 'uuid':\n        $data = random_bytes(16);\n        $data[6] = chr(ord($data[6]) & 0x0f | 0x40);\n        $data[8] = chr(ord($data[8]) & 0x3f | 0x80);\n        $result = vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));\n        break;\n    case 'hex':\n        $result = bin2hex(random_bytes($len / 2));\n        break;\n    case 'number':\n        $result = random_int(0, (int)pow(10, min($len, 18)) - 1);\n        break;\n    case 'string':\n    default:\n        $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';\n        $result = '';\n        for ($i = 0; $i < $len; $i++) $result .= $chars[random_int(0, strlen($chars) - 1)];\n        break;\n}\nreturn ['type' => $type, 'value' => $result];",
+      "is_approved": 1
+    },
+    {
+      "name": "http_probe",
+      "description": "Probe a URL: send request, get status code, redirects, timing, and response snippet",
+      "keywords": "http, url, probe, test, request, status, check, availability, monitoring",
+      "language": "php",
+      "parameters_schema": {
+        "url": "string (required)",
+        "method": "string optional: HEAD (default), GET, POST",
+        "timeout": "number optional: timeout in seconds (default 10)"
+      },
+      "code": "$url = trim($params['url'] ?? '');\n$method = strtoupper(trim($params['method'] ?? 'HEAD'));\n$timeout = max(1, min(60, (int)($params['timeout'] ?? 10)));\n\nif ($url === '') {\n    return ['ok' => false, 'error' => 'URL is required'];\n}\n\nif (!filter_var($url, FILTER_VALIDATE_URL)) {\n    return ['ok' => false, 'error' => 'Invalid URL format'];\n}\n\n$startTime = microtime(true);\n\ntry {\n    $ch = curl_init($url);\n    curl_setopt_array($ch, [\n        CURLOPT_RETURNTRANSFER => true,\n        CURLOPT_HEADER => true,\n        CURLOPT_TIMEOUT => $timeout,\n        CURLOPT_FOLLOWLOCATION => true,\n        CURLOPT_MAXREDIRS => 5,\n        CURLOPT_CUSTOMREQUEST => $method,\n        CURLOPT_USERAGENT => 'AgentHive/1.0',\n    ]);\n    \n    $response = curl_exec($ch);\n    $info = curl_getinfo($ch);\n    $curlError = curl_error($ch);\n    curl_close($ch);\n    \n    if ($curlError) {\n        return ['ok' => false, 'error' => 'curl: ' . $curlError, 'duration_ms' => round((microtime(true) - $startTime) * 1000, 2)];\n    }\n    \n    $duration = round((microtime(true) - $startTime) * 1000, 2);\n    \n    $headerSize = (int)$info['header_size'];\n    $body = substr($response, $headerSize);\n    $snippet = substr($body, 0, 500);\n    $snippetHash = md5($snippet);\n    \n    return [\n        'ok' => true,\n        'url' => $url,\n        'final_url' => $info['url'] ?? $url,\n        'method' => $method,\n        'status_code' => (int)$info['http_code'],\n        'content_type' => $info['content_type'] ?? null,\n        'content_length' => (int)$info['content_length_download'],\n        'redirects' => (int)($info['redirect_count'] ?? 0),\n        'timing' => [\n            'total_ms' => $duration,\n            'connect_ms' => round(($info['connect_time'] ?? 0) * 1000, 2),\n            'firstbyte_ms' => round(($info['starttransfer_time'] ?? 0) * 1000, 2),\n        ],\n        'snippet_hash' => $snippetHash,\n        'snippet_size' => strlen($snippet),\n    ];\n} catch (Exception $e) {\n    return ['ok' => false, 'error' => $e->getMessage(), 'duration_ms' => round((microtime(true) - $startTime) * 1000, 2)];\n}",
+      "is_approved": 1
+    }
+  ]
+}

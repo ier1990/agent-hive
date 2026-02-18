@@ -1,0 +1,32 @@
+[
+    {
+        "script_path": "/web/private/scripts/root_dirperm.sh",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/root_process_bash_history.py",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/sysinfo_local.sh",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/codewalker_cli.php",
+        "schedule": "*/15 * * * *",
+        "args_text": "--action=auto",
+        "enabled": 1
+    },
+    {
+        "script_path": "/web/private/scripts/root_update_scripts.sh",
+        "schedule": "@hourly",
+        "args_text": "",
+        "enabled": 1
+    }
+]

@@ -1,0 +1,42 @@
+{
+  "tools": [
+    {
+      "name": "story_roll_d20",
+      "description": "Rolls one d20 and returns the numeric result and outcome band",
+      "keywords": "story,dice,roll,d20,rpg",
+      "parameters_schema": {
+        "advantage": "boolean",
+        "disadvantage": "boolean"
+      },
+      "language": "php",
+      "is_approved": 1,
+      "code": "$a = !empty($params['advantage']);\n$d = !empty($params['disadvantage']);\n$r1 = random_int(1, 20);\n$r2 = random_int(1, 20);\n$used = $r1;\nif ($a && !$d) { $used = max($r1, $r2); }\nif ($d && !$a) { $used = min($r1, $r2); }\n$outcome = 'fail';\nif ($used >= 20) $outcome = 'critical_success';\nelseif ($used >= 16) $outcome = 'success';\nelseif ($used >= 11) $outcome = 'partial';\nelseif ($used <= 1) $outcome = 'critical_fail';\nreturn ['roll_1' => $r1, 'roll_2' => $r2, 'result' => $used, 'outcome' => $outcome];"
+    },
+    {
+      "name": "story_pick_random_twist",
+      "description": "Returns one random plot twist from a fixed list",
+      "keywords": "story,plot,twist,event",
+      "parameters_schema": {
+        "theme": "string"
+      },
+      "language": "php",
+      "is_approved": 1,
+      "code": "$theme = strtolower(trim((string)($params['theme'] ?? 'generic')));\n$pool = [\n  'A hidden signal source begins transmitting nearby.',\n  'An ally reveals a secret that changes priorities.',\n  'A resource cache is found, but it is trapped.',\n  'A familiar location is now controlled by enemies.'\n];\nif ($theme === 'horror') {\n  $pool[] = 'The lights fail and movement is heard behind the group.';\n}\nif ($theme === 'survival') {\n  $pool[] = 'The weather turns and your route becomes unsafe.';\n}\n$idx = random_int(0, count($pool) - 1);\nreturn ['twist' => $pool[$idx]];"
+    },
+    {
+      "name": "story_track_resource",
+      "description": "Applies a delta to a numeric resource and returns the new value",
+      "keywords": "story,state,resource,delta",
+      "parameters_schema": {
+        "name": "string",
+        "current": "number",
+        "delta": "number",
+        "min": "number",
+        "max": "number"
+      },
+      "language": "php",
+      "is_approved": 1,
+      "code": "$name = trim((string)($params['name'] ?? 'resource'));\n$current = (int)($params['current'] ?? 0);\n$delta = (int)($params['delta'] ?? 0);\n$min = array_key_exists('min', $params) ? (int)$params['min'] : PHP_INT_MIN;\n$max = array_key_exists('max', $params) ? (int)$params['max'] : PHP_INT_MAX;\n$new = $current + $delta;\nif ($new < $min) $new = $min;\nif ($new > $max) $new = $max;\nreturn ['name' => $name, 'old' => $current, 'delta' => $delta, 'new' => $new];"
+    }
+  ]
+}
