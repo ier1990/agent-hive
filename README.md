@@ -1,5 +1,12 @@
 # AgentHive
 
+![PHP](https://img.shields.io/badge/PHP-7.3-blue)
+![SQLite](https://img.shields.io/badge/DB-SQLite-lightgrey)
+![LAN First](https://img.shields.io/badge/Network-LAN--First-green)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue)
+
+---
+
 AgentHive is a self-hosted ops memory + AI backend: job queues, admin tools, notes/search, and API endpoints.
 Designed to be the first platform installed on every server — private by default, with optional public APIs.
 
@@ -39,12 +46,7 @@ Relevant env vars:
 - `INBOX_GUEST_TABLES` (default `guest_inbox`)
 - `INBOX_GUEST_MAX_BODY_BYTES` (default `200000`)
 
----
 
-![PHP](https://img.shields.io/badge/PHP-7.3-blue)
-![SQLite](https://img.shields.io/badge/DB-SQLite-lightgrey)
-![LAN First](https://img.shields.io/badge/Network-LAN--First-green)
-![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 
 AgentHive is for small teams who want AI assistance without sending their data to the cloud.
 
@@ -118,6 +120,12 @@ with:
 - **Chat routing** at `/v1/chat/` (autoselector) and `/v1/chat/completions` (OpenAI-compatible shim)
 - **Admin tools** under `/admin/` (protected with a “bootstrap token” flow to avoid fresh-install lockouts)
 - **CodeWalker** — AI-powered codebase analysis and modernization tool
+- **AI Story** collaborative narrative engine:
+  - Admin UI: `/admin/admin_AI_Story.php`
+  - API routes: `/v1/story/create`, `/v1/story/turn`, `/v1/story/list`, `/v1/story/relay`
+  - Choice-first turns (`A/B/C/Wildcard`) with optional note override
+  - Optional `story_*` Agent Tools integration (dice/twists/resource helpers)
+  - Auto-summary compression every 10 turns via `story_summarize` template
 
 ![CodeWalker Architecture](codewalker.png)
 
@@ -166,6 +174,20 @@ Edit settings at `/admin/codewalker.php?view=settings` or via the settings datab
 
 **Cost Efficiency:**
 At ~$0.24 per 250 files (using efficient models), CodeWalker provides comprehensive codebase intelligence at scale.
+
+### AI Story quick notes
+
+- Story data lives in SQLite at `/web/private/db/memory/story.db` (auto-created).
+- Load default templates from `/admin/admin_AI_Templates.php` using **Import Defaults**.
+- Default templates file path is `admin/defaults/templates_ai_headers.json`.
+- Story templates should use `story_` prefixes to keep them isolated from non-story templates.
+- Recommended baseline templates:
+  - `story_skynet_narrator`
+  - `story_skynet_dm`
+  - `story_skynet_tutorial`
+  - `story_summarize`
+- `story_summarize` is invoked every 10 turns to compress long history into `stories.summary`.
+- For stateful progression, stories should maintain structured `world_state` (for example: `health`, `danger_level`, `location`, `ammo`, `resources`).
 
 ---
 

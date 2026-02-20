@@ -107,6 +107,50 @@ if (!function_exists('story_ejson')) {
   }
 }
 
+if (!function_exists('story_default_world_state')) {
+  function story_default_world_state(string $templateName): array {
+    $tn = strtolower(trim($templateName));
+
+    // Stronger default schema for Skynet-style stories.
+    if (strpos($tn, 'skynet') !== false) {
+      $base = [
+        'resources' => 0,
+        'health' => 10,
+        'danger_level' => 2,
+        'location' => 'ruined_street',
+        'duct_route_mapped' => 0,
+        'drones_alerted' => 0,
+        'ammo' => 6,
+      ];
+      if (strpos($tn, 'dm') !== false || strpos($tn, 'dungeon') !== false) {
+        $base['health'] = 20;
+        $base['ammo'] = 12;
+        $base['rations'] = 3;
+      }
+      return $base;
+    }
+
+    return [
+      'resources' => 0,
+      'health' => 10,
+      'danger_level' => 1,
+      'location' => 'starting_point',
+    ];
+  }
+}
+
+if (!function_exists('story_merge_missing_defaults')) {
+  function story_merge_missing_defaults(array $worldState, string $templateName): array {
+    $defaults = story_default_world_state($templateName);
+    foreach ($defaults as $k => $v) {
+      if (!array_key_exists($k, $worldState)) {
+        $worldState[$k] = $v;
+      }
+    }
+    return $worldState;
+  }
+}
+
 if (!function_exists('story_table_columns')) {
   function story_table_columns(PDO $db, string $table): array {
     static $cache = [];
@@ -197,6 +241,17 @@ if (!function_exists('story_template_payload')) {
   }
 }
 
+if (!function_exists('story_template_exists')) {
+  function story_template_exists(string $templateName): bool {
+    if ($templateName === '') return false;
+    if (!function_exists('ai_templates_get_text_by_name')) return false;
+    $txt = ai_templates_get_text_by_name($templateName, 'payload');
+    if (trim((string)$txt) !== '') return true;
+    $txt2 = ai_templates_get_text_by_name($templateName, '');
+    return trim((string)$txt2) !== '';
+  }
+}
+
 if (!function_exists('story_format_context')) {
   function story_format_context(array $turns): string {
     if (empty($turns)) return '(Start of story)';
@@ -206,6 +261,60 @@ if (!function_exists('story_format_context')) {
       $lines[] = 'Narrative: ' . (string)($t['narrative'] ?? '');
     }
     return implode("\n", $lines);
+  }
+}
+
+if (!function_exists('story_turns_block')) {
+  function story_turns_block(array $turns, int $limit = 10): string {
+    if (count($turns) > $limit) {
+      $turns = array_slice($turns, -$limit);
+    }
+    $lines = [];
+    foreach ($turns as $t) {
+      $num = isset($t['turn_number']) ? (int)$t['turn_number'] : 0;
+      $act = isset($t['player_action']) ? (string)$t['player_action'] : '';
+      $nar = isset($t['narrative']) ? (string)$t['narrative'] : '';
+      $lines[] = 'Turn ' . $num . ' Action: ' . $act;
+      $lines[] = 'Turn ' . $num . ' Result: ' . $nar;
+    }
+    return implode("\n", $lines);
+  }
+}
+
+if (!function_exists('story_maybe_compress_summary')) {
+  function story_maybe_compress_summary(string $storyType, array $worldState, array $turns, string $currentSummary): string {
+    if (!story_template_exists('story_summarize')) {
+      return $currentSummary;
+    }
+
+    $bindings = [
+      'story_type' => $storyType,
+      'world_state' => json_encode($worldState, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+      'turns_block' => story_turns_block($turns, 10),
+      'summary' => $currentSummary,
+    ];
+
+    $payload = story_template_payload('story_summarize', $bindings);
+    $system = isset($payload['system']) ? (string)$payload['system'] : '';
+    $prompt = isset($payload['prompt']) ? (string)$payload['prompt'] : '';
+    $options = isset($payload['options']) && is_array($payload['options']) ? $payload['options'] : [];
+
+    $ai = story_ai_chat($system, $prompt, $options);
+    if (empty($ai['ok'])) {
+      return $currentSummary;
+    }
+
+    $parsed = story_parse_json_block((string)($ai['text'] ?? ''));
+    if (!is_array($parsed)) {
+      return $currentSummary;
+    }
+
+    $newSummary = trim((string)($parsed['summary'] ?? ''));
+    if ($newSummary === '') {
+      return $currentSummary;
+    }
+
+    return $newSummary;
   }
 }
 
@@ -221,9 +330,23 @@ if (!function_exists('story_parse_json_block')) {
     $arr = json_decode($txt, true);
     if (is_array($arr)) return $arr;
 
+    // Retry with lightweight repairs for common model mistakes (e.g. trailing commas).
+    $fixed = preg_replace('/,\s*([}\]])/', '$1', $txt);
+    if (is_string($fixed)) {
+      $arrFixed = json_decode(trim($fixed), true);
+      if (is_array($arrFixed)) return $arrFixed;
+    }
+
     if (preg_match('/\{[\s\S]*\}/', $txt, $m2)) {
-      $arr2 = json_decode((string)$m2[0], true);
+      $candidate = (string)$m2[0];
+      $arr2 = json_decode($candidate, true);
       if (is_array($arr2)) return $arr2;
+
+      $candidateFixed = preg_replace('/,\s*([}\]])/', '$1', $candidate);
+      if (is_string($candidateFixed)) {
+        $arr3 = json_decode(trim($candidateFixed), true);
+        if (is_array($arr3)) return $arr3;
+      }
     }
     return null;
   }
@@ -414,6 +537,10 @@ if (!function_exists('story_create')) {
       $cols[] = 'template_id';
       $vals[] = $templateName;
     }
+    if (story_col_exists($db, 'stories', 'world_state')) {
+      $cols[] = 'world_state';
+      $vals[] = story_ejson(story_default_world_state($templateName));
+    }
 
     $ph = implode(',', array_fill(0, count($cols), '?'));
     $sql = 'INSERT INTO stories (' . implode(',', $cols) . ') VALUES (' . $ph . ')';
@@ -527,8 +654,16 @@ if (!function_exists('story_take_turn')) {
     } elseif (isset($story['template_id']) && trim((string)$story['template_id']) !== '') {
       $templateName = (string)$story['template_id'];
     }
+
+    // Ensure required keys always exist so state deltas have ground truth to mutate.
+    $worldState = story_merge_missing_defaults($worldState, $templateName);
+    $bindings['world_state'] = json_encode($worldState, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
     $payload = story_template_payload($templateName, $bindings);
     $system = (string)($payload['system'] ?? '');
+    if (strpos(strtolower($templateName), 'skynet') !== false) {
+      $system .= "\n\nState rules:\n- You MUST update danger_level, health, and location in every state_delta.\n- health and danger_level must be JSON numbers (no plus sign).\n- location must be a concrete place string.";
+    }
     $prompt = (string)($payload['prompt'] ?? '');
     $options = isset($payload['options']) && is_array($payload['options']) ? $payload['options'] : [];
 
@@ -575,6 +710,19 @@ if (!function_exists('story_take_turn')) {
     }
 
     $stateDelta = isset($parsed['state_delta']) && is_array($parsed['state_delta']) ? $parsed['state_delta'] : [];
+    if (strpos(strtolower($templateName), 'skynet') !== false) {
+      if (!array_key_exists('danger_level', $stateDelta)) $stateDelta['danger_level'] = 0;
+      if (!array_key_exists('health', $stateDelta)) $stateDelta['health'] = 0;
+      if (!array_key_exists('location', $stateDelta)) $stateDelta['location'] = (string)($worldState['location'] ?? 'unknown');
+
+      // Normalize numeric deltas if model returned numeric strings such as \"+1\".
+      if (isset($stateDelta['danger_level']) && is_string($stateDelta['danger_level']) && preg_match('/^[+-]?[0-9]+$/', $stateDelta['danger_level'])) {
+        $stateDelta['danger_level'] = (int)$stateDelta['danger_level'];
+      }
+      if (isset($stateDelta['health']) && is_string($stateDelta['health']) && preg_match('/^[+-]?[0-9]+$/', $stateDelta['health'])) {
+        $stateDelta['health'] = (int)$stateDelta['health'];
+      }
+    }
     foreach ($stateDelta as $k => $v) {
       if (isset($worldState[$k]) && is_numeric($worldState[$k]) && is_numeric($v)) {
         $worldState[$k] += (0 + $v);
@@ -597,19 +745,28 @@ if (!function_exists('story_take_turn')) {
       ];
     }
 
+    $turnNumber = (int)$story['turn_count'] + 1;
     $chapterBeat = trim((string)($parsed['chapter_beat'] ?? ''));
     $summary = (string)$story['summary'];
     if ($chapterBeat !== '') {
       $beats = array_filter(explode("\n", $summary));
-      $beats[] = 'Turn ' . ((int)$story['turn_count'] + 1) . ': ' . $chapterBeat;
+      $beats[] = 'Turn ' . $turnNumber . ': ' . $chapterBeat;
       if (count($beats) > 30) {
         $beats = array_slice($beats, -30);
       }
       $summary = implode("\n", $beats);
     }
+    if ($turnNumber % 10 === 0) {
+      $summaryTurns = $recent;
+      $summaryTurns[] = [
+        'turn_number' => $turnNumber,
+        'player_action' => $action,
+        'narrative' => $narrative,
+      ];
+      $summary = story_maybe_compress_summary($templateName, $worldState, $summaryTurns, $summary);
+    }
 
     $turnId = story_new_id();
-    $turnNumber = (int)$story['turn_count'] + 1;
 
     $turnCols = ['turn_id','story_id','turn_number','player_id','player_action','narrative','choices','wildcard','state_delta','model','tokens_used','latency_ms'];
     $turnVals = [$turnId,$storyId,$turnNumber,$playerId,$action,$narrative,story_ejson($choices),$wildcard,story_ejson($stateDelta),(string)($ai['model'] ?? ''),(int)($ai['tokens'] ?? 0),(int)($ai['latency_ms'] ?? 0)];

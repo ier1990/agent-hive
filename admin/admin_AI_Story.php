@@ -4,6 +4,7 @@ require_once APP_LIB . '/auth/auth.php';
 require_once APP_LIB . '/ai_templates.php';
 require_once APP_LIB . '/story_engine.php';
 
+
 auth_require_admin();
 auth_session_start();
 
@@ -253,6 +254,18 @@ POST /v1/story/relay
         <?php if (!empty($currentStory['summary'])): ?>
           <h2 style="margin-top:12px;">Summary</h2>
           <p style="white-space: pre-wrap;" class="meta"><?php echo story_h((string)$currentStory['summary']); ?></p>
+        <?php endif; ?>
+      </div>
+
+      <div class="card">
+        <h2>World State</h2>
+        <?php 
+          $worldState = json_decode((string)$currentStory['world_state'], true);
+          if (is_array($worldState) && !empty($worldState)):
+        ?>
+          <pre style="background: #0b1220; padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 12px;"><?php echo story_h(json_encode($worldState, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></pre>
+        <?php else: ?>
+          <p class="meta">(Empty – will be populated by first turn)</p>
         <?php endif; ?>
       </div>
 
