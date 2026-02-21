@@ -11,6 +11,7 @@ Default stages (in order):
 This allows a single cron entry while preserving individual scripts for manual debugging.
 """
 
+
 from __future__ import annotations
 
 import argparse
@@ -98,7 +99,7 @@ def job_upsert_finish(db: sqlite3.Connection, job: str, ok: bool, duration_ms: i
     db.commit()
 
 
-def lock_or_exit(path: str) -> None:
+def lock_or_exit(path: str) -> int:
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -109,6 +110,8 @@ def lock_or_exit(path: str) -> None:
     except BlockingIOError:
         print("[process_bash_history] lock busy; exiting", file=sys.stderr)
         raise SystemExit(0)
+    
+    return fd
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -172,18 +175,23 @@ def run_stage(stage_name: str, cmd: List[str], dry_run: bool) -> int:
         return 0
 
     completed = subprocess.run(cmd)
+    print("[process_bash_history] stage=%s rc=%s" % (stage_name, completed.returncode), file=sys.stderr)
     return int(completed.returncode)
 
 
 def main() -> int:
     args = parse_args(sys.argv[1:])
-    lock_or_exit(LOCK_PATH)
+    lock_fd = lock_or_exit(LOCK_PATH)  # Keep fd alive to preserve lock
 
     os.makedirs(os.path.dirname(HUMAN_DB), exist_ok=True)
     hb = sqlite3.connect(HUMAN_DB)
     ensure_job_runs_schema(hb)
 
     plan = build_plan(args)
+    print("[process_bash_history] plan:", file=sys.stderr)
+    for i, (stage_name, cmd) in enumerate(plan, 1):
+        print("  %d. %s: %s" % (i, stage_name, " ".join(cmd)), file=sys.stderr)
+    
     start = time.time()
     job_upsert_start(hb, JOB_NAME, "stages=%s dry_run=%s" % (len(plan), int(bool(args.dry_run))))
 

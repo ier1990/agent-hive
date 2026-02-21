@@ -439,12 +439,15 @@ def main() -> int:
             int(line_count),
         )
 
+        # Detect rotation/truncation: start_line beyond EOF means history was rotated or truncated
         if start_line > line_count:
-            save_state(state_db, TOPIC_STATE_HOST, hist, inode, line_count)
-            msg = "noop start_line_past_eof"
+            is_inode_changed = old_inode and old_inode != inode
+            msg = "detected_rotation inode_changed=%s old_inode=%s new_inode=%s line_count=%s start_line=%s" % (
+                bool(is_inode_changed), old_inode, inode, line_count, start_line
+            )
             logger.info(msg)
-            _job_upsert_finish(state_db, job_name, "ok", int((time.time() - t0) * 1000), msg)
-            return 0
+            # Reset to beginning and reprocess (self-healing from rotation/truncation)
+            start_line = 1
 
         new_lines = lines[start_line - 1 :]
         new_lines = [s for s in new_lines if s.strip() and not s.strip().startswith("#")]
