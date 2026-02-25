@@ -1,8 +1,8 @@
-## AI Header
+## AI Template
 
-This folder is the start of an “AI Header” app.
+This folder is the start of an “AI Template” app.
 
-**AI Header** is the neutral name for the whole instruction envelope you send to an LLM: system + persona + prompt + RAG/context + controls + execution metadata.
+**AI Template** is the neutral name for the whole instruction envelope you send to an LLM: system + persona + prompt + RAG/context + controls + execution metadata.
 
 The goal is to end the endless “system vs prompt vs persona” confusion by making the envelope explicit, versioned, and repeatable.
 
@@ -10,8 +10,8 @@ The goal is to end the endless “system vs prompt vs persona” confusion by ma
 
 ## Terminology
 
-- **AI Header**: the complete instruction envelope for one run.
-- **AI Header Template** (`.tpl`): the editable source that compiles into an AI Header.
+- **AI Template**: the complete instruction envelope for one run.
+- **AI Template** (`.tpl`): the editable source that compiles into an AI Template.
 - **Compiled Header**: the resolved output after template variables are substituted.
 - **Pre-processing**: optional steps that generate/inject context (RAG pulls, file excerpts, memory snippets) before dispatch.
 - **Dispatcher**: the execution adapter (Ollama/OpenAI/etc) that turns a compiled header into an API call.
@@ -29,13 +29,30 @@ The app is a template editor + registry:
 
 Some templates can be sent directly to a model; others require pre-processing (for example, populating `{{ attachments }}` from a RAG query).
 
+---
+
+## Testing
+
+Use the CLI smoke tests to validate parser behavior and default install JSON files:
+
+```bash
+php /web/html/admin/AI_Templates/test/run.php
+```
+
+This checks:
+
+- `{{ variable }}` rendering
+- `{{ if ... }} / {{ else }} / {{ endif }}` logic
+- AI payload parsing (`payload_text` + parsed `payload`)
+- default JSON template files used during onboarding/import
+
 
 
 
 
 ---
 
-## AI Header model (v1)
+## AI Template model (v1)
 
 The header is organized into layers so each piece has a clear job.
 
@@ -84,7 +101,7 @@ The header is organized into layers so each piece has a clear job.
 
 Templates use a simple `{{ variable }}` substitution syntax.
 
-AI Headers
+AI Templates
 Tell your router:
 - which model to use
 - which API key
@@ -124,7 +141,7 @@ Notes:
 
 ## Lifecycle
 
-1) **Editor**: user edits an AI Header Template (`.tpl`)
+1) **Editor**: user edits an AI Template (`.tpl`)
 2) **Compiler**: resolves `{{ variables }}` into a **Compiled Header**
 3) **Pre-processor (optional)**: populates variables like `attachments` via RAG, file excerpts, memory injection
 4) **Dispatcher**: sends the compiled header to a model backend (Ollama, OpenAI, etc)
@@ -195,7 +212,7 @@ Templates have a `type` used for grouping and dispatch:
 
 ## Why this matters
 
-AI Header is infrastructure:
+AI Template is infrastructure:
 
 - repeatable runs
 - easier debugging (“what did we send?”)

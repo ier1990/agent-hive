@@ -23,7 +23,7 @@ What it does
 
 Load last N messages from your conversation DB
 
-Render AI_Header Chat Shrinker v1
+Render AI_Template Chat Shrinker v1
 
 Ask model for:
 

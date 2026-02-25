@@ -43,8 +43,8 @@ Admin pages use `lib/auth/auth.php` with:
 - CLI and cron integration
 - Multi-model support
 
-### 3. AI Header System (`/admin/AI/`)
-- AI Header templating system
+### 3. AI Template System (`/admin/AI/`)
+- AI Template templating system
 - Conductor logic for building AI-ready headers
 - Model + tools + context coordination
 - Performance-ready execution preparation

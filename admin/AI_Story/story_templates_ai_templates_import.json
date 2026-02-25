@@ -1,5 +1,5 @@
 {
-    "schema": "ai_header_templates",
+    "schema": "ai_template_templates",
     "templates": [
         {
             "name": "story_skynet_narrator",

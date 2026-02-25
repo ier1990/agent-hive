@@ -1,9 +1,11 @@
 <?php
-// /admin/AI_Header/AI_Header.php
+// /web/html/lib/ai_templates_class.php
+require_once __DIR__ . '/templates_class.php';
 
-class AI_Header
+class AI_Template
 {
     private $config = [];
+    private $templateEngine = null;
 
     public function __construct(array $config = [])
     {
@@ -16,6 +18,12 @@ class AI_Header
             'debug'          => false,     // verbose logging    
 
         ], $config);
+
+        if (class_exists('templates_class')) {
+            $this->templateEngine = new templates_class([
+                'missing_policy' => (string)$this->config['missing_policy'],
+            ]);
+        }
     }
 
     // Variadic: any number of inputs
@@ -79,7 +87,7 @@ class AI_Header
         return $compiled;
     }
 
-    public function ai_header_check_block_indentation(string $tpl): array
+    public function ai_template_check_block_indentation(string $tpl): array
     {
         $tpl = str_replace("\r\n", "\n", $tpl);
         $lines = explode("\n", $tpl);
@@ -143,7 +151,7 @@ class AI_Header
         ];
     }
 
-    public function ai_header_fix_block_indentation(string $tpl): array
+    public function ai_template_fix_block_indentation(string $tpl): array
     {
         $tpl = str_replace("\r\n", "\n", $tpl);
         $lines = explode("\n", $tpl);
@@ -193,6 +201,17 @@ class AI_Header
         ];
     }
 
+    // Backward-compatible aliases for existing callers.
+    public function ai_header_check_block_indentation(string $tpl): array
+    {
+        return $this->ai_template_check_block_indentation($tpl);
+    }
+
+    public function ai_header_fix_block_indentation(string $tpl): array
+    {
+        return $this->ai_template_fix_block_indentation($tpl);
+    }
+
 
     private function normalizeBindings(...$inputs): array
     {
@@ -217,6 +236,10 @@ class AI_Header
 
     private function extractVariables(string $tpl): array
     {
+        if ($this->templateEngine instanceof templates_class) {
+            return $this->templateEngine->extractVariables($tpl);
+        }
+
         preg_match_all('/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/', $tpl, $m);
         $vars = $m[1] ?? [];
         $vars = array_values(array_unique($vars));
@@ -226,6 +249,10 @@ class AI_Header
 
     private function render(string $tpl, array $bindings): string
     {
+        if ($this->templateEngine instanceof templates_class) {
+            return $this->templateEngine->render($tpl, $bindings);
+        }
+
         // Render line-by-line so multi-line substitutions keep indentation.
         $tpl = str_replace("\r\n", "\n", $tpl);
         $lines = explode("\n", $tpl);
@@ -420,4 +447,9 @@ class AI_Header
         while ($c < $len && $line[$c] === ' ') $c++;
         return $c;
     }
+}
+
+// Backward-compatible class alias while callers migrate.
+if (!class_exists('AI_Header') && class_exists('AI_Template')) {
+    class_alias('AI_Template', 'AI_Header');
 }

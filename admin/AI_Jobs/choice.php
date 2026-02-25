@@ -24,7 +24,7 @@ Payload
 
 What it does
 
-Renders AI_Header Choice Router v1
+Renders AI_Template Choice Router v1
 
 Returns one choice id + short reason
 
@@ -124,7 +124,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__, 3) . '/lib/bootstrap.php';
 // require_once __DIR__ . '/../mq.php'; // your queue class
-require_once dirname(__DIR__, 2) . '/AI_Header/AI_Header.php';
+require_once dirname(__DIR__, 2) . '/AI_Templates/AI_Template.php';
 // require_once __DIR__ . '/../conversation_class.php'; // your existing convo runner
 
 function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
@@ -306,10 +306,10 @@ if ($view === 'form' || $mode === 'human') {
 
 // AI mode (or auto)
 try {
-  // Build bindings + AI_Header template here
-  // $headerText = load AI_Header template "Choice Router v1"
+  // Build bindings + AI_Template template here
+  // $headerText = load AI_Template template "Choice Router v1"
   // $bindings = [... question, choices, etc ...]
-  // $payloadArr = (new AI_Header())->compilePayload($headerText, $bindings)
+  // $payloadArr = (new AI_Template())->compilePayload($headerText, $bindings)
   // $resultText = $conversation->run($payloadArr)
   // $result = json_decode($resultText,true) ...
 

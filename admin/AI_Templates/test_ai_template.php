@@ -1,11 +1,11 @@
 <?php
-// CLI test script for AI_Header
+// CLI test script for AI_Template
 // Run:
-//   php /web/html/admin/AI_Header/test_ai_header.php
+//   php /web/html/admin/AI_Templates/test_ai_template.php
 
-require_once __DIR__ . '/AI_Header.php';
+require_once __DIR__ . '/AI_Template.php';
 
-$ai = new AI_Header([
+$ai = new AI_Template([
 	'debug' => true,
 	// Policy: missing vars ignored
 	'missing_policy' => 'ignore',

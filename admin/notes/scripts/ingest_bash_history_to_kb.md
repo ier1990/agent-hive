@@ -263,7 +263,7 @@ It does not call a model.
 
 It does not perform the enrichment itself.
 
-It does not use AI_Header yet.
+It does not use AI_Template yet.
 It just captures commands + queues future work.
 
 Why it’s a great “first job” for Mother Queue

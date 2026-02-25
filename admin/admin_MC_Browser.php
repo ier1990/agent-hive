@@ -158,7 +158,7 @@ $json_menu = json_decode('[
   { "label": "Home",  "url": "/" },
   { "label": "Notes", "url": "/admin/admin_notes.php" },  
     { "label": "Codewalker", "url": "/admin/codewalker.php" },
-    { "label": "AI Header", "url": "/admin/AI_Header/index.php" }
+    { "label": "AI Templates", "url": "/admin/AI_Templates/index.php" }
 ]', true); // <-- true = associative array
 // URL encoding (to avoid double-encoding)
 function url_encode($str) {
@@ -204,7 +204,7 @@ menu_ensure_item($default_menu, 'Admin', '/admin/index.php');
 menu_ensure_item($default_menu, 'Home', '/');
 menu_ensure_item($default_menu, 'Notes', '/admin/admin_notes.php');
 menu_ensure_item($default_menu, 'Codewalker', '/admin/codewalker.php');
-menu_ensure_item($default_menu, 'AI Header', '/admin/AI_Header/index.php');
+menu_ensure_item($default_menu, 'AI Templates', '/admin/AI_Templates/index.php');
 
 // Persist if we created/normalized/augmented the menu.
 if ($menuWasUpdated || !is_file($default_menu_file)) {
@@ -906,5 +906,4 @@ endforeach;
 
 </body>
 </html>
-
 

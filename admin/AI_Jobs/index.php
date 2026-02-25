@@ -14,7 +14,7 @@ Purpose
 Take a set of options and pick the best next action (or ask a clarifying question).
 Either for AI or Human to answer.
 
-That gives you the human router immediately (HTML form), and an obvious spot to wire AI routing using your AI_Header + conversation class.
+That gives you the human router immediately (HTML form), and an obvious spot to wire AI routing using your AI_Template + conversation class.
 
 Where it plugs into chat
 
@@ -56,8 +56,8 @@ Since you already show recent jobs, add a tiny “Templates / Tools” page that
 
 tool name
 
-/web/html/admin/AI_Header
-AI_Header it uses
+/web/html/admin/AI_Template
+AI_Template it uses
 
 required payload keys
 
@@ -82,21 +82,21 @@ bash.ingest_bash_history → existing handler
 
 code.catalog → runs catalog.php or calls its function
 
-code.summarize → uses AI_Header + conversation class
+code.summarize → uses AI_Template + conversation class
 
-chat.shrink → uses AI_Header + conversation class
+chat.shrink → uses AI_Template + conversation class
 
-pick.choice → uses AI_Header + conversation class
+pick.choice → uses AI_Template + conversation class
 
 No new framework.
 
 The immediate next two files I’d create
 
 /admin/AI/tools/chat_shrinker.php
-Contains handler: load messages → compile AI_Header → call conversation class → store summary.
+Contains handler: load messages → compile AI_Template → call conversation class → store summary.
 
 /admin/AI/tools/choice.php
-Contains handler: compile AI_Header with the options → call model → validate response → enqueue next job.
+Contains handler: compile AI_Template with the options → call model → validate response → enqueue next job.
 
 These give you the “kewl tools” you’re imagining, fast.
 

@@ -1,5 +1,5 @@
 <?php
-//admin/AI_Header
+//admin/AI_Template
 require_once __DIR__ . '/../lib/bootstrap.php';
 require_once APP_LIB . '/auth/auth.php';
 auth_require_admin();
@@ -207,27 +207,27 @@ function upload_error_text($code): string
   return 'Unknown upload error.';
 }
 
-function ai_header_allowed_types(): array
+function ai_template_allowed_types(): array
 {
   return ['header', 'payload', 'text'];
 }
 
-function ai_header_normalize_type(string $type): string
+function ai_template_normalize_type(string $type): string
 {
   $type = strtolower(trim($type));
   if ($type === '') return 'payload';
-  return in_array($type, ai_header_allowed_types(), true) ? $type : 'payload';
+  return in_array($type, ai_template_allowed_types(), true) ? $type : 'payload';
 }
 
-function ai_header_is_allowed_type(string $type): bool
+function ai_template_is_allowed_type(string $type): bool
 {
-  return in_array(strtolower(trim($type)), ai_header_allowed_types(), true);
+  return in_array(strtolower(trim($type)), ai_template_allowed_types(), true);
 }
 
 $messages = [];
 $errors = [];
 
-function ai_header_b64_decode_text(string $b64): string
+function ai_template_b64_decode_text(string $b64): string
 {
   $b64 = preg_replace('/\s+/', '', $b64);
   if (!is_string($b64) || $b64 === '') return '';
@@ -235,7 +235,7 @@ function ai_header_b64_decode_text(string $b64): string
   return is_string($raw) ? $raw : '';
 }
 
-function ai_header_write_backup(string $storageDir, array $tpl): void
+function ai_template_write_backup(string $storageDir, array $tpl): void
 {
   $id = (string)($tpl['id'] ?? '');
   if ($id === '') return;
@@ -247,26 +247,26 @@ function ai_header_write_backup(string $storageDir, array $tpl): void
   );
 }
 
-function ai_header_sync_backups(PDO $db, string $storageDir): int
+function ai_template_sync_backups(PDO $db, string $storageDir): int
 {
   $storageDir = rtrim($storageDir, "/\\");
   $files = glob($storageDir . '/template_*.json') ?: [];
   $have = [];
   foreach ($files as $fp) {
     //if (preg_match('/template_([^\/\\]+)\.json$/', (string)$fp, $m)) {
-    //Warning: preg_match(): Compilation failed: missing terminating ] for character class at offset 25 in /web/html/admin/AI_Header/index.php on line 142
+    //Warning: preg_match(): Compilation failed: missing terminating ] for character class at offset 25 in /web/html/admin/AI_Templates/index.php on line 142
     if (preg_match('/template_([a-f0-9]+)\.json$/', (string)$fp, $m)) {
       $have[(string)$m[1]] = (string)$fp;
     }
   }
 
-  $rows = $db->query('SELECT id,name,type,template_text,created_at,updated_at FROM ai_header_templates')->fetchAll(PDO::FETCH_ASSOC);
+  $rows = $db->query('SELECT id,name,type,template_text,created_at,updated_at FROM ai_template_templates')->fetchAll(PDO::FETCH_ASSOC);
   $written = 0;
 
   foreach ($rows as $r) {
     $id = (string)($r['id'] ?? '');
     if ($id === '') continue;
-    $type = ai_header_normalize_type((string)($r['type'] ?? ''));
+    $type = ai_template_normalize_type((string)($r['type'] ?? ''));
     $updatedAt = (string)($r['updated_at'] ?? '');
     $createdAt = (string)($r['created_at'] ?? '');
 
@@ -283,7 +283,7 @@ function ai_header_sync_backups(PDO $db, string $storageDir): int
     }
 
     if ($shouldWrite) {
-      ai_header_write_backup($storageDir, [
+      ai_template_write_backup($storageDir, [
         'id' => $id,
         'name' => (string)($r['name'] ?? ''),
         'type' => $type,
@@ -298,15 +298,15 @@ function ai_header_sync_backups(PDO $db, string $storageDir): int
   return $written;
 }
 
-function ai_header_restore_from_backups(PDO $db, string $storageDir): int
+function ai_template_restore_from_backups(PDO $db, string $storageDir): int
 {
   $files = glob(rtrim($storageDir, "/\\") . '/template_*.json');
   if (!$files) return 0;
 
-  $selById = $db->prepare('SELECT id FROM ai_header_templates WHERE id = :id');
-  $selByName = $db->prepare('SELECT id FROM ai_header_templates WHERE name = :name');
-  $ins = $db->prepare('INSERT INTO ai_header_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
-  $upd = $db->prepare('UPDATE ai_header_templates SET name=:name, type=:type, template_text=:tpl, updated_at=:updated WHERE id=:id');
+  $selById = $db->prepare('SELECT id FROM ai_template_templates WHERE id = :id');
+  $selByName = $db->prepare('SELECT id FROM ai_template_templates WHERE name = :name');
+  $ins = $db->prepare('INSERT INTO ai_template_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
+  $upd = $db->prepare('UPDATE ai_template_templates SET name=:name, type=:type, template_text=:tpl, updated_at=:updated WHERE id=:id');
 
   $now = gmdate('c');
   $restored = 0;
@@ -318,7 +318,7 @@ function ai_header_restore_from_backups(PDO $db, string $storageDir): int
 
     $id = trim((string)($decoded['id'] ?? ''));
     $name = trim((string)($decoded['name'] ?? ''));
-    $type = ai_header_normalize_type((string)($decoded['type'] ?? ''));
+    $type = ai_template_normalize_type((string)($decoded['type'] ?? ''));
     $tpl = (string)($decoded['template_text'] ?? '');
     if ($name === '' || trim($tpl) === '') continue;
     if ($id === '') $id = new_id();
@@ -344,13 +344,13 @@ function ai_header_restore_from_backups(PDO $db, string $storageDir): int
   return $restored;
 }
 
-function ai_header_ensure_template(PDO $db, string $storageDir, string $name, string $type, string $tplText): bool
+function ai_template_ensure_template(PDO $db, string $storageDir, string $name, string $type, string $tplText): bool
 {
   $name = trim($name);
   if ($name === '' || trim($tplText) === '') return false;
-  $type = ai_header_normalize_type($type);
+  $type = ai_template_normalize_type($type);
 
-  $stmt = $db->prepare('SELECT id FROM ai_header_templates WHERE name = :name');
+  $stmt = $db->prepare('SELECT id FROM ai_template_templates WHERE name = :name');
   $stmt->execute([':name' => $name]);
   $row = $stmt->fetch(PDO::FETCH_ASSOC);
   if ($row && !empty($row['id'])) {
@@ -359,7 +359,7 @@ function ai_header_ensure_template(PDO $db, string $storageDir, string $name, st
 
   $now = gmdate('c');
   $id = new_id();
-  $ins = $db->prepare('INSERT INTO ai_header_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
+  $ins = $db->prepare('INSERT INTO ai_template_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
   $ins->execute([
     ':id' => $id,
     ':name' => $name,
@@ -369,7 +369,7 @@ function ai_header_ensure_template(PDO $db, string $storageDir, string $name, st
     ':updated' => $now,
   ]);
 
-  ai_header_write_backup($storageDir, [
+  ai_template_write_backup($storageDir, [
     'id' => $id,
     'name' => $name,
     'type' => $type,
@@ -396,7 +396,7 @@ $db->exec('PRAGMA journal_mode=WAL');
 $db->exec('PRAGMA synchronous=NORMAL');
 $db->exec('PRAGMA busy_timeout=5000');
 
-$db->exec('CREATE TABLE IF NOT EXISTS ai_header_templates (
+$db->exec('CREATE TABLE IF NOT EXISTS ai_template_templates (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
   type TEXT NOT NULL DEFAULT "payload" CHECK (type IN ("header","payload","text")),
@@ -405,26 +405,26 @@ $db->exec('CREATE TABLE IF NOT EXISTS ai_header_templates (
   updated_at TEXT NOT NULL DEFAULT (datetime(\'now\'))
 )');
 
-$db->exec('CREATE INDEX IF NOT EXISTS idx_ai_header_templates_type_name ON ai_header_templates(type, name)');
-$db->exec('CREATE INDEX IF NOT EXISTS idx_ai_header_templates_updated ON ai_header_templates(updated_at)');
+$db->exec('CREATE INDEX IF NOT EXISTS idx_ai_template_templates_type_name ON ai_template_templates(type, name)');
+$db->exec('CREATE INDEX IF NOT EXISTS idx_ai_template_templates_updated ON ai_template_templates(updated_at)');
 
 // Lightweight migration (for older DBs created before `type` existed)
-if (!db_has_column($db, 'ai_header_templates', 'type')) {
-	$db->exec('ALTER TABLE ai_header_templates ADD COLUMN type TEXT NOT NULL DEFAULT "payload"');
+if (!db_has_column($db, 'ai_template_templates', 'type')) {
+	$db->exec('ALTER TABLE ai_template_templates ADD COLUMN type TEXT NOT NULL DEFAULT "payload"');
 }
 
 // Normalize existing types to the supported set
-$db->exec("UPDATE ai_header_templates SET type='payload' WHERE type IS NULL OR trim(type) = '' OR lower(trim(type)) NOT IN ('header','payload','text')");
+$db->exec("UPDATE ai_template_templates SET type='payload' WHERE type IS NULL OR trim(type) = '' OR lower(trim(type)) NOT IN ('header','payload','text')");
 
 // Seed defaults if empty (first run)
-$count = (int)$db->query('SELECT COUNT(*) AS c FROM ai_header_templates')->fetch(PDO::FETCH_ASSOC)['c'];
+$count = (int)$db->query('SELECT COUNT(*) AS c FROM ai_template_templates')->fetch(PDO::FETCH_ASSOC)['c'];
 if ($count === 0) {
   $now = gmdate('c');
 
   // Prefer restoring from portable JSON backups if they exist.
   $restored = 0;
   try {
-    $restored = ai_header_restore_from_backups($db, $storageDir);
+    $restored = ai_template_restore_from_backups($db, $storageDir);
   } catch (Throwable $t) {
     $restored = 0;
   }
@@ -433,7 +433,7 @@ if ($count === 0) {
     $messages[] = "Restored {$restored} template(s) from JSON backups.";
   } else {
     // Try to load defaults from external JSON file
-    $defaultsFile = __DIR__ . '/defaults/templates_ai_headers.json';
+    $defaultsFile = __DIR__ . '/defaults/templates_ai_templates.json';
     $defaults = [];
     if (is_file($defaultsFile) && is_readable($defaultsFile)) {
       $json = @file_get_contents($defaultsFile);
@@ -491,15 +491,15 @@ if ($count === 0) {
       ];
     }
 
-    $ins = $db->prepare('INSERT INTO ai_header_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
+    $ins = $db->prepare('INSERT INTO ai_template_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
     foreach ($defaults as $d) {
       $tplText = (string)($d['tpl'] ?? '');
       if ($tplText === '' && isset($d['tpl_b64'])) {
-        $tplText = ai_header_b64_decode_text((string)$d['tpl_b64']);
+        $tplText = ai_template_b64_decode_text((string)$d['tpl_b64']);
       }
       if (trim($tplText) === '') continue;
       $id = new_id();
-      $type = ai_header_normalize_type((string)($d['type'] ?? 'payload'));
+      $type = ai_template_normalize_type((string)($d['type'] ?? 'payload'));
 
       $ins->execute([
         ':id' => $id,
@@ -510,7 +510,7 @@ if ($count === 0) {
         ':updated' => $now,
       ]);
 
-      ai_header_write_backup($storageDir, [
+      ai_template_write_backup($storageDir, [
         'id' => $id,
         'name' => (string)$d['name'],
         'type' => $type,
@@ -524,7 +524,7 @@ if ($count === 0) {
 
 // Keep portable backups in sync with DB (missing or stale)
 try {
-  ai_header_sync_backups($db, $storageDir);
+  ai_template_sync_backups($db, $storageDir);
 } catch (Throwable $t) {
   // best-effort; do not block UI
 }
@@ -537,15 +537,15 @@ try {
 
   $tplScriptsMd = "system: |\n  You respond in English only and output Markdown only.\n\nuser: |\n  Respond in ENGLISH only.\n\n  Write a concise, well-structured help guide in MARKDOWN for an internal scripts knowledge base.\n  - Output MARKDOWN only (no preamble like 'Answer' or 'जवाब').\n  - Include: Purpose, Language ({{ lang }}), How to run (example command), Inputs/flags/env vars, Outputs/artifacts, Error handling/exit codes, Dependencies, Security considerations.\n\n  SCRIPT ({{ lang }}) SOURCE:\n  ---\n  {{ code }}\n  ---\n\noptions:\n  temperature: 0.4\n  max_tokens: 1400\n";
 
-  if (ai_header_ensure_template($db, $storageDir, 'Scripts KB - HTML Help', 'payload', $tplScriptsHtml)) $added++;
-  if (ai_header_ensure_template($db, $storageDir, 'Scripts KB - Markdown Help', 'payload', $tplScriptsMd)) $added++;
+  if (ai_template_ensure_template($db, $storageDir, 'Scripts KB - HTML Help', 'payload', $tplScriptsHtml)) $added++;
+  if (ai_template_ensure_template($db, $storageDir, 'Scripts KB - Markdown Help', 'payload', $tplScriptsMd)) $added++;
 
   $tplNotesMetadata = "system: |\n  You generate metadata for an internal LAN-only notes system.\n  Return ONLY a single JSON object. No markdown, no code fences, no extra text.\n  Schema:\n  {\n    \"doc_kind\": \"bash_history|sysinfo|manual_pdf|bios_pdf|general_note|code|reminder|passwords|links|images|files|tags|other\",\n    \"summary\": \"1-2 sentence summary\",\n    \"tags\": [\"tag1\",\"tag2\"],\n    \"entities\": [\"asus\",\"x570\",\"tpm\",\"secure boot\"],\n    \"commands\": [\"systemctl restart ollama\",\"apt-get install ...\"],\n    \"cmd_families\": [\"systemctl\",\"apt\",\"docker\",\"ufw\",\"journalctl\"],\n    \"sensitivity\": \"normal|sensitive\"\n  }\n  Rules:\n  - tags/entities/commands/cmd_families must be arrays (can be empty).\n  - If note looks like bash history or logs, extract commands.\n  - If note looks like a manual/pdf, set doc_kind accordingly.\n  - If note_type is 'passwords', set sensitivity='sensitive' and keep summary minimal.\n\nuser: |\n  note_id: {{ note.id }}\n  parent_id: {{ note.parent_id }}\n  notes_type: {{ note.notes_type }}\n  topic: {{ note.topic }}\n  created_at: {{ note.created_at }}\n  updated_at: {{ note.updated_at }}\n\n  NOTE CONTENT:\n  {{ note.note }}\n\noptions:\n  temperature: 0.2\n\nstream: false\n";
 
   $tplBashClassify = "system: |\n  You are a bash command classifier.\n  Return ONLY valid JSON (no markdown, no extra text).\n  Schema:\n  {\n    \"base_cmd\": string,\n    \"known\": boolean,\n    \"intent\": string,\n    \"keywords\": [string,...],\n    \"search_query\": string|null,\n    \"notes\": string\n  }\n  Rules:\n  - base_cmd should be the first real command (skip leading 'sudo' and env assignments).\n  - If you are not confident, set known=false and search_query=null.\n  - search_query should be a good web query to learn what the command does.\n\nuser: |\n  Command:\n  full_cmd: {{ full_cmd }}\n  base_cmd_guess: {{ base_cmd }}\n\noptions:\n  temperature: 0\n\nstream: false\n";
 
-  if (ai_header_ensure_template($db, $storageDir, 'Notes Metadata', 'payload', $tplNotesMetadata)) $added++;
-  if (ai_header_ensure_template($db, $storageDir, 'Bash Command Classifier', 'payload', $tplBashClassify)) $added++;
+  if (ai_template_ensure_template($db, $storageDir, 'Notes Metadata', 'payload', $tplNotesMetadata)) $added++;
+  if (ai_template_ensure_template($db, $storageDir, 'Bash Command Classifier', 'payload', $tplBashClassify)) $added++;
   if ($added > 0) {
     $messages[] = "Added {$added} required template(s).";
   }
@@ -556,9 +556,9 @@ try {
 // Export handlers (download JSON)
 $action = (string)($_GET['action'] ?? 'list');
 if ($action === 'export_all') {
-  $templatesAll = $db->query('SELECT id,name,type,template_text,created_at,updated_at FROM ai_header_templates ORDER BY type ASC, name ASC')->fetchAll(PDO::FETCH_ASSOC);
-  send_json_download('ai_header_templates_export.json', [
-    'schema' => 'ai_header_templates',
+  $templatesAll = $db->query('SELECT id,name,type,template_text,created_at,updated_at FROM ai_template_templates ORDER BY type ASC, name ASC')->fetchAll(PDO::FETCH_ASSOC);
+  send_json_download('ai_template_templates_export.json', [
+    'schema' => 'ai_template_templates',
     'version' => 1,
     'exported_at' => gmdate('c'),
     'templates' => $templatesAll,
@@ -567,7 +567,7 @@ if ($action === 'export_all') {
 
 if ($action === 'export') {
   $id = (string)($_GET['id'] ?? '');
-  $stmt = $db->prepare('SELECT id,name,type,template_text,created_at,updated_at FROM ai_header_templates WHERE id = :id');
+  $stmt = $db->prepare('SELECT id,name,type,template_text,created_at,updated_at FROM ai_template_templates WHERE id = :id');
   $stmt->execute([':id' => $id]);
   $tpl = $stmt->fetch(PDO::FETCH_ASSOC);
   if (!$tpl) {
@@ -576,7 +576,7 @@ if ($action === 'export') {
     echo 'Not found.';
     exit;
   }
-  $fn = 'ai_header_' . preg_replace('/[^a-zA-Z0-9._-]+/', '_', (string)$tpl['name']) . '.json';
+  $fn = 'ai_template_' . preg_replace('/[^a-zA-Z0-9._-]+/', '_', (string)$tpl['name']) . '.json';
   send_json_download($fn, $tpl);
 }
 if (!in_array($action, ['class','list', 'new', 'edit', 'help'], true)) {
@@ -590,7 +590,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
   if ($postAction === 'import') {
     try {
-      $defaultImportPath = __DIR__ . '/defaults/templates_ai_headers.json';
+      $defaultImportPath = __DIR__ . '/defaults/templates_ai_templates.json';
       $source = trim((string)($_POST['import_source'] ?? 'upload'));
       $raw = '';
 
@@ -639,16 +639,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
       $imported = 0;
       $updated = 0;
 
-      $selById = $db->prepare('SELECT id FROM ai_header_templates WHERE id = :id');
-      $selByName = $db->prepare('SELECT id FROM ai_header_templates WHERE name = :name');
-      $ins = $db->prepare('INSERT INTO ai_header_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
-      $upd = $db->prepare('UPDATE ai_header_templates SET name=:name, type=:type, template_text=:tpl, updated_at=:updated WHERE id=:id');
+      $selById = $db->prepare('SELECT id FROM ai_template_templates WHERE id = :id');
+      $selByName = $db->prepare('SELECT id FROM ai_template_templates WHERE name = :name');
+      $ins = $db->prepare('INSERT INTO ai_template_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
+      $upd = $db->prepare('UPDATE ai_template_templates SET name=:name, type=:type, template_text=:tpl, updated_at=:updated WHERE id=:id');
 
       foreach ($items as $it) {
         if (!is_array($it)) continue;
         $name = trim((string)($it['name'] ?? ''));
         $tpl = (string)($it['template_text'] ?? '');
-        $type = ai_header_normalize_type((string)($it['type'] ?? ''));
+        $type = ai_template_normalize_type((string)($it['type'] ?? ''));
         $id = trim((string)($it['id'] ?? ''));
 
         if ($name === '' || trim($tpl) === '') {
@@ -711,22 +711,22 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
     if ($name === '' || strlen($name) > 200) $errors[] = 'Name is required (max 200 chars).';
     if ($type === '') $type = 'payload';
-    if (!ai_header_is_allowed_type($type)) $errors[] = 'Type must be one of: header, payload, text.';
+    if (!ai_template_is_allowed_type($type)) $errors[] = 'Type must be one of: header, payload, text.';
     if (strlen($type) > 20) $errors[] = 'Type must be <= 20 chars.';
     if (trim($tpl) === '') $errors[] = 'Template text is required.';
 
-    $type = ai_header_normalize_type($type);
+    $type = ai_template_normalize_type($type);
 
     if (empty($errors)) {
       $now = gmdate('c');
       try {
         if ($id === '') {
           $id = new_id();
-          $stmt = $db->prepare('INSERT INTO ai_header_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
+          $stmt = $db->prepare('INSERT INTO ai_template_templates (id,name,type,template_text,created_at,updated_at) VALUES (:id,:name,:type,:tpl,:created,:updated)');
           $stmt->execute([':id' => $id, ':name' => $name, ':type' => $type, ':tpl' => $tpl, ':created' => $now, ':updated' => $now]);
           $messages[] = 'Created.';
         } else {
-          $stmt = $db->prepare('UPDATE ai_header_templates SET name=:name, type=:type, template_text=:tpl, updated_at=:updated WHERE id=:id');
+          $stmt = $db->prepare('UPDATE ai_template_templates SET name=:name, type=:type, template_text=:tpl, updated_at=:updated WHERE id=:id');
           $stmt->execute([':id' => $id, ':name' => $name, ':type' => $type, ':tpl' => $tpl, ':updated' => $now]);
           $messages[] = 'Saved.';
         }
@@ -758,7 +758,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
       $errors[] = 'Missing id.';
     } else {
       try {
-        $stmt = $db->prepare('DELETE FROM ai_header_templates WHERE id = :id');
+        $stmt = $db->prepare('DELETE FROM ai_template_templates WHERE id = :id');
         $stmt->execute([':id' => $id]);
         $messages[] = 'Deleted.';
       } catch (Throwable $t) {
@@ -773,7 +773,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 $row = null;
 if ($action === 'edit') {
   $id = (string)($_GET['id'] ?? '');
-  $stmt = $db->prepare('SELECT * FROM ai_header_templates WHERE id = :id');
+  $stmt = $db->prepare('SELECT * FROM ai_template_templates WHERE id = :id');
   $stmt->execute([':id' => $id]);
   $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
   if (!$row) {
@@ -784,13 +784,13 @@ if ($action === 'edit') {
 
 $templates = [];
 if ($action === 'list') {
-  $templates = $db->query('SELECT id,name,type,updated_at FROM ai_header_templates ORDER BY type ASC, name ASC')->fetchAll(PDO::FETCH_ASSOC);
+  $templates = $db->query('SELECT id,name,type,updated_at FROM ai_template_templates ORDER BY type ASC, name ASC')->fetchAll(PDO::FETCH_ASSOC);
 }
 
 $helpHtml = '';
 $classHtml = '';
 if ($action === 'class') {
-  $classPath = __DIR__ . '/AI_Header/CLASS.md';
+  $classPath = __DIR__ . '/AI_Templates/CLASS.md';
     if (is_file($classPath)) {  
     $raw = @file_get_contents($classPath);
     if (is_string($raw) && $raw !== '') {
@@ -805,7 +805,7 @@ if ($action === 'class') {
 
 
   if ($action === 'help') {
-  $helpPath = __DIR__ . '/AI_Header/README.md';
+  $helpPath = __DIR__ . '/AI_Templates/README.md';
   if (is_file($helpPath)) {
     $raw = @file_get_contents($helpPath);
     if (is_string($raw) && $raw !== '') {
@@ -915,7 +915,7 @@ The Conductor turns them into a performance.<BR>
       <input type="hidden" name="action" value="import" />
       <input type="hidden" name="import_source" value="defaults" />
       <button class="btn" type="submit">Import Defaults</button>
-      <span class="muted">Loads <code>admin/defaults/templates_ai_headers.json</code></span>
+      <span class="muted">Loads <code>admin/defaults/templates_ai_templates.json</code></span>
     </form>
 
       <table>
@@ -958,8 +958,8 @@ The Conductor turns them into a performance.<BR>
         <label>Type</label>
         <select name="type" style="width:100%; padding:10px; border:1px solid #ccc; border-radius:8px;">
           <?php
-            $currentType = ai_header_normalize_type($row ? (string)($row['type'] ?? 'payload') : 'payload');
-            foreach (ai_header_allowed_types() as $opt) {
+            $currentType = ai_template_normalize_type($row ? (string)($row['type'] ?? 'payload') : 'payload');
+            foreach (ai_template_allowed_types() as $opt) {
               $sel = ($opt === $currentType) ? ' selected' : '';
               echo '<option value="' . e($opt) . '"' . $sel . '>' . e($opt) . '</option>';
             }

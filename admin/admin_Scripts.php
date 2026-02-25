@@ -9,25 +9,25 @@ if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
 // Shared bootstrap helpers (paths, env loader, CodeWalker JSON reader)
 require_once dirname(__DIR__) . '/lib/bootstrap.php';
 
-require_once __DIR__ . '/AI_Header/AI_Header.php';
+require_once __DIR__ . '/AI_Templates/AI_Template.php';
 
-$ai = new AI_Header([
+$ai = new AI_Template([
 	'debug' => true,
 	// Policy: missing vars ignored
 	'missing_policy' => 'ignore',
 ]);
 
-function ai_header_db_path(): string {
+function ai_template_db_path(): string {
   $root = defined('PRIVATE_ROOT') ? (string)PRIVATE_ROOT : '/web/private';
   return rtrim($root, "/\\") . '/db/memory/ai_header.db';
 }
 
-function ai_header_get_template_text_by_name(string $name): string {
-  $path = ai_header_db_path();
+function ai_template_get_template_text_by_name(string $name): string {
+  $path = ai_template_db_path();
   if (!is_file($path)) return '';
   $db = new SQLite3($path);
-  // Table is created by /admin/AI_Header/index.php or /admin/admin_AI_Templates.php.
-  $stmt = $db->prepare('SELECT template_text FROM ai_header_templates WHERE name = :name LIMIT 1');
+  // Table is created by /admin/AI_Templates/index.php or /admin/admin_AI_Templates.php.
+  $stmt = $db->prepare('SELECT template_text FROM ai_template_templates WHERE name = :name LIMIT 1');
   $stmt->bindValue(':name', $name, SQLITE3_TEXT);
   $res = $stmt->execute();
   $row = $res ? $res->fetchArray(SQLITE3_ASSOC) : null;
@@ -358,10 +358,10 @@ function ai_generate_help_markdown($filePath,$filename,$modelPrimary,$modelFallb
   $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
   // Language names: .py -> Python, .php -> PHP, .sh -> BASH
   $lang = ($ext==='py') ? 'Python' : (($ext==='php') ? 'PHP' : (($ext==='sh') ? 'BASH' : strtoupper($ext)));
-  // Markdown help (AI_Header template)
-  $tpl = ai_header_get_template_text_by_name('Scripts KB - Markdown Help');
+  // Markdown help (AI_Template template)
+  $tpl = ai_template_get_template_text_by_name('Scripts KB - Markdown Help');
   $payload = [];
-  if ($tpl !== '' && $ai instanceof AI_Header) {
+  if ($tpl !== '' && $ai instanceof AI_Template) {
     $payload = $ai->compilePayload($tpl, [
       'lang' => $lang,
       'filename' => $filename,

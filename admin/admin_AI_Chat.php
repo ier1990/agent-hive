@@ -10,7 +10,7 @@ error_reporting(E_ALL);
 if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
 
 require_once dirname(__DIR__) . '/lib/bootstrap.php';
-require_once __DIR__ . '/AI_Header/AI_Header.php';
+require_once __DIR__ . '/AI_Templates/AI_Template.php';
 require_once APP_LIB . '/ai_templates.php';
 
 $IS_EMBED = in_array(strtolower($_GET['embed'] ?? ''), ['1','true','yes'], true);
@@ -28,15 +28,15 @@ function csrf_ok_ai_chat($t){
   return isset($_SESSION['csrf_ai_chat']) && hash_equals((string)$_SESSION['csrf_ai_chat'], (string)$t);
 }
 
-function ai_header_db_path(): string {
+function ai_template_db_path(): string {
   return ai_templates_db_path();
 }
 
-function ai_header_list_template_names(string $type = 'payload'): array {
+function ai_template_list_template_names(string $type = 'payload'): array {
   return ai_templates_list_names($type);
 }
 
-function ai_header_get_template_text_by_name(string $name): string {
+function ai_template_get_template_text_by_name(string $name): string {
   return ai_templates_get_text_by_name($name, 'payload');
 }
 
@@ -199,7 +199,7 @@ $settings = ai_settings_get();
 // Load saved connections for connection dropdown
 $savedConnections = ai_saved_profiles_recent(100);
 
-$ai = new AI_Header([
+$ai = new AI_Template([
   'missing_policy' => 'ignore',
   'debug' => false,
 ]);
@@ -207,7 +207,7 @@ $ai = new AI_Header([
 $builtinTemplateName = '__builtin_simple_chat__';
 $builtinTemplateText = "system: |\n  You are a helpful assistant.\nuser: |\n  {{ user_message }}\n";
 
-$templates = ai_header_list_template_names('payload');
+$templates = ai_template_list_template_names('payload');
 
 $preferredDefaultTemplate = 'Default Chat';
 
@@ -278,7 +278,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         if ($selectedTemplate === $builtinTemplateName) {
           $tplText = $builtinTemplateText;
         } else {
-          $tplText = ai_header_get_template_text_by_name($selectedTemplate);
+          $tplText = ai_template_get_template_text_by_name($selectedTemplate);
         }
 
         // Compile template -> system/user payload (like Scripts KB)
@@ -343,7 +343,7 @@ $lastDebug = is_array($_SESSION['ai_chat_last_debug']) ? $_SESSION['ai_chat_last
     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
       <div>
         <h1 class="text-xl font-semibold">AI Chat</h1>
-        <div class="text-xs text-slate-400">Uses shared AI settings + AI_Header templates</div>
+        <div class="text-xs text-slate-400">Uses shared AI settings + AI_Template templates</div>
       </div>
       <div class="flex flex-wrap gap-2">
         <a class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" href="admin_AI_Setup.php?popup=1&amp;postmessage=1&amp;return=admin_AI_Chat.php<?= $IS_EMBED ? '%3Fembed%3D1' : '' ?>" target="_blank">AI Setup…</a>
@@ -405,7 +405,7 @@ $lastDebug = is_array($_SESSION['ai_chat_last_debug']) ? $_SESSION['ai_chat_last
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label class="block text-xs text-slate-400 mb-1">Template (AI_Header payload)</label>
+                <label class="block text-xs text-slate-400 mb-1">Template (AI_Template payload)</label>
                 <select name="template" class="w-full rounded bg-slate-950 border border-slate-700 px-2 py-2 text-sm">
                   <option value="<?=h($builtinTemplateName)?>" <?= $selectedTemplate === $builtinTemplateName ? 'selected' : '' ?>>Built-in: Simple Chat</option>
                   <?php foreach ($templates as $name): ?>
@@ -484,7 +484,7 @@ $lastDebug = is_array($_SESSION['ai_chat_last_debug']) ? $_SESSION['ai_chat_last
           <div class="text-sm font-semibold mb-2">Tips</div>
           <ul class="text-sm text-slate-300 space-y-1 list-disc ml-5">
             <li>Use AI Setup to change provider/base/model/key globally.</li>
-            <li>Select an AI_Header payload template to auto-generate system/user prompts.</li>
+            <li>Select an AI_Template payload template to auto-generate system/user prompts.</li>
             <li>If you use https://localhost with self-signed certs, uncheck Verify SSL.</li>
           </ul>
         </div>

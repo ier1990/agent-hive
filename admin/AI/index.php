@@ -32,7 +32,7 @@ header('Content-Type: text/html; charset=utf-8');
 $year = date('Y');
 
 // Paths you mentioned
-$compiledDir = __DIR__ . '/../AI_Header/compiled';
+$compiledDir = __DIR__ . '/../AI_Templates/compiled';
 $compiledDirExists = is_dir($compiledDir);
 
 //DB = os.environ.get("MOTHER_QUEUE_DB", "/web/private/db/memory/mother_queue.db")
@@ -235,7 +235,7 @@ if ($compiledDirExists) {
     <div class="card">
       <h2>AI Sub-Apps</h2>
       <div class="links">
-        <a href="/admin/AI_Header/index.php">AI Headers (Templates)</a>
+        <a href="/admin/AI_Templates/index.php">AI Templates</a>
         <a href="/admin/codewalker.php">CodeWalker</a>
         <a href="/admin/notes.php">Notes</a>
         <a href="/v1/notes/">/v1/notes (legacy)</a>
@@ -257,7 +257,7 @@ if ($compiledDirExists) {
       </div>
 
       <div class="row"><span class="k">Next integration</span>
-        CodeWalker should use <span class="pill">AI_Header</span> to compile prompts/templates.
+        CodeWalker should use <span class="pill">AI_Template</span> to compile prompts/templates.
       </div>
 
       <div class="row"><span class="k">Compiled headers dir</span>
@@ -281,8 +281,8 @@ if ($compiledDirExists) {
     <div class="card">
       <h2>Bring AI Live</h2>
       <div class="links">
-        <a href="/admin/AI_Header/test_ai_header.php">Test compile (AI Header)</a>
-        <a href="/admin/AI_Header/index.php">Edit templates</a>
+        <a href="/admin/AI_Templates/test_ai_template.php">Test compile (AI Template)</a>
+        <a href="/admin/AI_Templates/index.php">Edit templates</a>
         <a href="/admin/codewalker_cli.php">Run CodeWalker (CLI UI)</a>
       </div>
       <div class="sub" style="margin-top:8px">
@@ -452,8 +452,8 @@ if ($compiledDirExists) {
     <div class="card">
       <h2>Roadmap (drain the old files)</h2>
       <div class="row"><span class="k">Drain CodeWalker.php</span> Move logic into <code>/admin/AI/</code> and shared <code>/lib</code>.</div>
-      <div class="row"><span class="k">Centralize templates</span> All prompt content comes from AI Header Templates.</div>
-      <div class="row"><span class="k">Save compiled JSON</span> CodeWalker writes compiled headers to <code>/admin/AI_Header/compiled/</code>.</div>
+      <div class="row"><span class="k">Centralize templates</span> All prompt content comes from AI Templates.</div>
+      <div class="row"><span class="k">Save compiled JSON</span> CodeWalker writes compiled headers to <code>/admin/AI_Templates/compiled/</code>.</div>
     </div>
   </div>
 
@@ -489,8 +489,8 @@ the various AI sub-apps (Headers, CodeWalker runner, Notes pipeline, etc).
 FATCS:
 1) codewalker alreadt has a Queue running every 15 mins.
 2) Its purpose is to rewrite/summarize every file in set of folders (see $scan_path).
-3) It shall next use AI_Header to compile prompts/templates.
-4) The compiled headers will be saved as JSON files in admin/AI_Header/compiled/
+3) It shall next use AI_Template to compile prompts/templates.
+4) The compiled headers will be saved as JSON files in admin/AI_Templates/compiled/
 
 
 </pre>
@@ -507,12 +507,12 @@ root@samekhi3090:/web/html/admin# tree.
 ├── AI
 │   ├── index.php
 │   └── README.md
-├── AI_Header
-│   ├── AI_Header.php
+├── AI_Template
+│   ├── AI_Template.php
 │   ├── CLASS.md
 │   ├── index.php
 │   ├── README.md
-│   └── test_ai_header.php
+│   └── test_ai_template.php
 ├── codewalker_cli.php
 ├── codewalker.php
 ├── codew_backup.php
@@ -543,7 +543,7 @@ root@samekhi3090:/web/html/admin# tree.
     <pre>
         That tree actually reads way nicer with admin/AI/ as the “landing zone.” Good move.
 
-A couple suggestions so it stays clean as you grow (and so your AI Header work doesn’t get “stranded” in admin/AI_Header/ forever):
+A couple suggestions so it stays clean as you grow (and so your AI Template work doesn’t get “stranded” in admin/AI_Templates/ forever):
 
 1) Make admin/AI/ the hub, and keep features as sub-apps
 
@@ -555,7 +555,7 @@ admin/AI/README.md = what this section is
 
 Then move/house AI sub-apps under it over time:
 
-admin/AI/headers/ (your AI Header Templates app)
+admin/AI/headers/ (your AI Templates app)
 
 admin/AI/codewalker/
 
@@ -565,7 +565,7 @@ admin/AI/scripts/ (if you want admin-visible script runners)
 
 Right now you have:
 
-AI_Header/ (fine for now)
+AI_Template/ (fine for now)
 
 codewalker* scattered at root
 
@@ -575,7 +575,7 @@ No need to reorganize today, but the “end shape” will be calmer.
 
 Since you’re about to reuse the compiler everywhere, aim for:
 
-/web/html/lib/ai_header/AI_Header.php (shared lib)
+/web/html/lib/ai_header/AI_Template.php (shared lib)
 
 admin/AI/headers/index.php uses the lib
 
@@ -588,7 +588,7 @@ That prevents “admin app owns the library” (which always becomes painful).
 
 Even a simple list makes it feel intentional:
 
-AI Headers (Templates → compiled → model-ready)
+AI Templates (Templates → compiled → model-ready)
 
 CodeWalker (refactor runner)
 
@@ -596,7 +596,7 @@ Notes pipeline (search digests, bash history KB)
 
 5) Tiny naming tweak that will help later
 
-Rename folder from AI_Header → headers eventually (short, consistent, easier URLs):
+Rename folder from AI_Template → headers eventually (short, consistent, easier URLs):
 
 /admin/AI/headers/
 
@@ -604,9 +604,9 @@ Not urgent, but it keeps paths sane.
 
 Quick check (since you’re on PHP 7.3 in Jville)
 
-Just make sure AI_Header.php in this tree no longer has typed properties and your test_ai_header.php runs with:
+Just make sure AI_Template.php in this tree no longer has typed properties and your test_ai_template.php runs with:
 
-php /web/html/admin/AI_Header/test_ai_header.php
+php /web/html/admin/AI_Templates/test_ai_template.php
 
 
 If that passes locally, you’re safe to deploy the same to Jville.

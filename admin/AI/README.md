@@ -13,15 +13,15 @@ Turns sheet music into a live performance
 
 Mapping (perfect fit):
 
-Sheet music → AI Header Template
+Sheet music → AI Template
 
 Orchestra → Model + tools + context
 
 Performance → Model-ready execution
 
-Conductor → AI Header Compiler / Builder
+Conductor → AI Template Compiler / Builder
 
-“AI Header Conductor”
+“AI Template Conductor”
 “The Conductor turns templates into model-ready headers.”
 
 This will make instant sense to engineers and musicians.
@@ -60,22 +60,22 @@ Band Leader – informal, not timeless
 
 The clean mental model (this is the win)
 Music	Your System
-Sheet Music	AI Header Template
+Sheet Music	AI Template
 Arrangement	Precompile
 Conductor	Compiler / Builder
 Orchestra	Model + tools
 Performance	Model-Ready Header
 Strong recommendation (lock this in)
 
-AI Header Templates = Sheet Music
+AI Templates = Sheet Music
 
-AI Header Conductor = the thing that compiles + builds
+AI Template Conductor = the thing that compiles + builds
 
 Model-Ready Header = the performance-ready score
 
 You could literally write in the README:
 
-“AI Headers are sheet music.
+“AI Templates are sheet music.
 The Conductor turns them into a performance.”
 
 That’s memorable, accurate, and future-proof.

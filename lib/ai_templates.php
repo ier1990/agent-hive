@@ -60,15 +60,15 @@ if (!function_exists('ai_templates_get_text_by_name')) {
 if (!function_exists('ai_templates_compile_payload')) {
 	function ai_templates_compile_payload(string $templateText, array $bindings = []): array
 	{
-		$classFile = dirname(__DIR__) . '/admin/AI_Header/AI_Header.php';
+		$classFile = dirname(__DIR__) . '/lib/ai_templates_class.php';
 		if (!is_file($classFile)) {
 			return [];
 		}
 		require_once $classFile;
-		if (!class_exists('AI_Header')) {
+		if (!class_exists('AI_Template')) {
 			return [];
 		}
-		$ai = new AI_Header([
+		$ai = new AI_Template([
 			'missing_policy' => 'ignore',
 			'debug' => false,
 		]);

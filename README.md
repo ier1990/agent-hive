@@ -179,7 +179,7 @@ At ~$0.24 per 250 files (using efficient models), CodeWalker provides comprehens
 
 - Story data lives in SQLite at `/web/private/db/memory/story.db` (auto-created).
 - Load default templates from `/admin/admin_AI_Templates.php` using **Import Defaults**.
-- Default templates file path is `admin/defaults/templates_ai_headers.json`.
+- Default templates file path is `admin/defaults/templates_ai_templates.json`.
 - Story templates should use `story_` prefixes to keep them isolated from non-story templates.
 - Recommended baseline templates:
   - `story_skynet_narrator`
@@ -353,7 +353,7 @@ TurnKey Linux → **TurnKey AI appliance**: a self-hosted, private, LAN-aware AI
 
 AI stack components (plan):
 
-- AI Header → request envelope (model, limits, rules)
+- AI Template → request envelope (model, limits, rules)
 - AI Templates → editable prompt blueprints
 - AI Compiler → renders templates
 - AI Engine → calls model
