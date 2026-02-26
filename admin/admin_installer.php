@@ -723,6 +723,79 @@ function loadStoryTemplates() {
         </div>
     </div>
 
+    <h3 class="text-lg font-bold mb-4 mt-8">🌐 Apache Configuration (Critical)</h3>
+    <p class="text-gray-400 mb-6">Add these Apache configuration blocks for correct API routing and admin access:</p>
+    
+    <div class="space-y-4 mb-8">
+        <!-- Apache Config 1: /v1 API -->
+        <div class="bg-gray-800 p-4 rounded border border-red-700">
+            <div class="flex items-start justify-between">
+                <div class="flex-1">
+                    <div class="font-bold text-red-400 mb-2">⚠️ Required: /v1 API Directory Configuration</div>
+                    <div class="text-sm text-gray-400 mb-3">
+                        <strong>DirectorySlash Off</strong> is required for /v1 API rewrite rules to work correctly
+                    </div>
+                    <div class="font-mono bg-gray-900 p-3 rounded text-xs text-green-400 overflow-x-auto">
+&lt;Directory /web/html/v1&gt;<br/>
+&nbsp;&nbsp;Options -Indexes -MultiViews +FollowSymLinks<br/>
+&nbsp;&nbsp;AllowOverride All<br/>
+&nbsp;&nbsp;Require all granted<br/>
+&nbsp;&nbsp;<strong class="text-yellow-300">DirectorySlash Off</strong><br/>
+&lt;/Directory&gt;
+                    </div>
+                    <div class="text-xs text-gray-400 mt-3">
+                        <strong>Where to add:</strong> 
+                        <ul class="list-disc ml-5 mt-1 space-y-1">
+                            <li>Debian/Ubuntu: <span class="font-mono">/etc/apache2/sites-available/000-default.conf</span></li>
+                            <li>RHEL/CentOS: <span class="font-mono">/etc/httpd/conf/httpd.conf</span> or <span class="font-mono">/etc/httpd/conf.d/vhost.conf</span></li>
+                        </ul>
+                    </div>
+                    <div class="text-xs text-yellow-300 mt-2">
+                        After adding: <span class="font-mono">sudo systemctl reload apache2</span> (or <span class="font-mono">httpd</span>)
+                    </div>
+                </div>
+                <div class="text-3xl">🔧</div>
+            </div>
+        </div>
+
+        <!-- Apache Config 2: /admin -->
+        <div class="bg-gray-800 p-4 rounded border border-gray-700">
+            <div class="flex items-start justify-between">
+                <div class="flex-1">
+                    <div class="font-bold text-yellow-400 mb-2">Admin Directory Configuration</div>
+                    <div class="text-sm text-gray-400 mb-3">
+                        Allows .htaccess auth configuration in admin directory
+                    </div>
+                    <div class="font-mono bg-gray-900 p-3 rounded text-xs text-green-400 overflow-x-auto">
+&lt;Directory /web/html/admin&gt;<br/>
+&nbsp;&nbsp;Options -Indexes -MultiViews +FollowSymLinks<br/>
+&nbsp;&nbsp;AllowOverride AuthConfig<br/>
+&nbsp;&nbsp;Require all granted<br/>
+&lt;/Directory&gt;
+                    </div>
+                    <div class="text-xs text-gray-400 mt-3">
+                        Add to the same Apache configuration file as above
+                    </div>
+                </div>
+                <div class="text-3xl">🔐</div>
+            </div>
+        </div>
+
+        <!-- Verification -->
+        <div class="bg-blue-900 border border-blue-500 p-4 rounded">
+            <div class="font-bold text-blue-200 mb-2">✓ Verify Configuration</div>
+            <div class="text-sm text-blue-200 mb-2">After adding the configuration blocks:</div>
+            <div class="font-mono bg-gray-900 p-3 rounded text-xs text-green-400 space-y-1">
+                <div>sudo apachectl configtest</div>
+                <div>sudo systemctl reload apache2  # or httpd on RHEL</div>
+                <div>curl -s http://localhost/v1/health | jq</div>
+            </div>
+            <div class="text-xs text-blue-300 mt-2">
+                Health check should return JSON without 404/redirect errors
+            </div>
+        </div>
+    </div>
+
     <h3 class="text-lg font-bold mb-4 mt-8">⚙️ Post-Installation Configuration</h3>
     <div class="space-y-3 text-sm">
         <div class="text-gray-400">
