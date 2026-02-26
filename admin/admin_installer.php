@@ -156,6 +156,82 @@ function createDirectories() {
     
         return $results;
 }
+
+// C) Load Story Templates Function
+function loadStoryTemplates() {
+        $templateFile = __DIR__ . '/AI_Story/story_templates_ai_templates_import.json';
+        $result = [
+                'attempted' => true,
+                'file_exists' => is_file($templateFile),
+                'loaded' => 0,
+                'errors' => [],
+                'message' => ''
+        ];
+        
+        if (!$result['file_exists']) {
+                $result['message'] = 'Template file not found at ' . $templateFile;
+                return $result;
+        }
+        
+        $raw = @file_get_contents($templateFile);
+        if (!is_string($raw) || $raw === '') {
+                $result['message'] = 'Cannot read template file';
+                return $result;
+        }
+        
+        $data = json_decode($raw, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+                $result['message'] = 'Invalid JSON: ' . json_last_error_msg();
+                return $result;
+        }
+        
+        // Handle both {templates:[]} and {items:[]} formats
+        $templates = $data['templates'] ?? $data['items'] ?? $data;
+        if (!is_array($templates)) {
+                $result['message'] = 'JSON must contain templates array';
+                return $result;
+        }
+        
+        try {
+                $dbPath = '/web/private/db/memory/ai_header.db';
+                $dir = dirname($dbPath);
+                if (!is_dir($dir)) @mkdir($dir, 0775, true);
+                
+                $db = new SQLite3($dbPath);
+                $db->exec('CREATE TABLE IF NOT EXISTS ai_header_templates (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT UNIQUE NOT NULL,
+                        type TEXT DEFAULT "payload",
+                        template_text TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )');
+                
+                foreach ($templates as $tpl) {
+                        $name = trim($tpl['name'] ?? '');
+                        $type = trim($tpl['type'] ?? 'payload');
+                        $text = $tpl['template_text'] ?? $tpl['text'] ?? '';
+                        
+                        if ($name === '' || $text === '') {
+                                $result['errors'][] = 'Skipped invalid template (missing name or text)';
+                                continue;
+                        }
+                        
+                        try {
+                                $db->exec("INSERT OR REPLACE INTO ai_header_templates (name, type, template_text, created_at) VALUES ('" . $db->escapeString($name) . "', '" . $db->escapeString($type) . "', '" . $db->escapeString($text) . "', CURRENT_TIMESTAMP)");
+                                $result['loaded']++;
+                        } catch (Throwable $e) {
+                                $result['errors'][] = $name . ': ' . $e->getMessage();
+                        }
+                }
+                
+                $db->close();
+                $result['message'] = 'Loaded ' . $result['loaded'] . ' templates';
+        } catch (Throwable $e) {
+                $result['message'] = 'Error: ' . $e->getMessage();
+        }
+        
+        return $result;
+}
 ?>
 <!DOCTYPE html>
 <html><head>
@@ -259,6 +335,36 @@ function createDirectories() {
         <div class="text-2xl mb-2">🎉 Success!</div>
         <p>Environment checks passed and directories created.</p>
     </div>
+    
+    <?php
+    // Try to load story templates automatically
+    $templateResult = loadStoryTemplates();
+    ?>
+    
+    <?php if ($templateResult['attempted']): ?>
+        <div class="mb-6 p-4 rounded border <?= $templateResult['loaded'] > 0 ? 'bg-blue-900 border-blue-500' : 'bg-yellow-900 border-yellow-600' ?>">
+            <div class="font-bold mb-2">📖 AI Story Templates</div>
+            <?php if ($templateResult['file_exists']): ?>
+                <div class="text-sm <?= $templateResult['loaded'] > 0 ? 'text-blue-200' : 'text-yellow-200' ?>">
+                    <?= $templateResult['message'] ?>
+                    <?php if ($templateResult['loaded'] > 0): ?>
+                        <div class="text-xs mt-2 text-green-300">✓ Templates ready for AI Story feature</div>
+                    <?php endif; ?>
+                </div>
+                <?php if (!empty($templateResult['errors'])): ?>
+                    <div class="text-xs text-red-300 mt-2">
+                        <?php foreach ($templateResult['errors'] as $err): ?>
+                            <div>• <?= $err ?></div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            <?php else: ?>
+                <div class="text-sm text-yellow-200">
+                    No template file found. You can load templates later via <a href="db_loader.php" class="text-blue-300 underline">/admin/db_loader.php</a>
+                </div>
+            <?php endif; ?>
+        </div>
+    <?php endif; ?>
 
     <h3 class="text-lg font-bold mb-4 mt-8">📋 Required Setup Scripts (Run in Order)</h3>
     <p class="text-gray-400 mb-6">These scripts must be executed as root/sudo to set up wrapper scripts and permissions:</p>
@@ -271,7 +377,9 @@ function createDirectories() {
                     <div class="font-bold text-yellow-400">1. Create Wrapper Scripts</div>
                     <div class="text-sm text-gray-400 mt-1">Generates executable wrappers in /web/private/scripts/ for all source scripts</div>
                     <div class="font-mono bg-gray-900 p-2 rounded mt-2 text-xs text-green-400">
-                        sudo /web/html/src/scripts/root_update_scripts.sh
+                        sudo -i
+                        cd /web/html/src/scripts
+                        bash ./root_update_scripts.sh
                     </div>
                     <div class="text-xs text-gray-500 mt-2">
                         Location: <span class="font-mono">/web/html/src/scripts/root_update_scripts.sh</span><br/>

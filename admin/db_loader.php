@@ -16,6 +16,25 @@ define('TOOLS_JSON_PATH', __DIR__ . '/defaults/agent_tools.json');
 
 // ---- Database Setup ----
 
+function templates_db(): SQLite3 {
+    static $db = null;
+    if ($db !== null) return $db;
+    
+    $path = PRIVATE_ROOT . '/db/memory/ai_header.db';
+    $dir = dirname($path);
+    if (!is_dir($dir)) @mkdir($dir, 0775, true);
+    
+    $db = new SQLite3($path);
+    $db->exec('CREATE TABLE IF NOT EXISTS ai_header_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        type TEXT DEFAULT "payload",
+        template_text TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )');
+    return $db;
+}
+
 function agent_db(): PDO {
     static $pdo = null;
     if ($pdo !== null) return $pdo;
@@ -180,6 +199,71 @@ function toggle_approval(string $name): array {
     return ['ok' => true, 'name' => $name, 'is_approved' => (int)($tool['is_approved'] ?? 0)];
 }
 
+// ---- Template Functions ----
+
+function load_templates_from_json(string $jsonPath): array {
+    if (!is_readable($jsonPath)) {
+        return ['ok' => false, 'error' => 'JSON file not found: ' . $jsonPath];
+    }
+    
+    $raw = @file_get_contents($jsonPath);
+    if (!is_string($raw) || $raw === '') {
+        return ['ok' => false, 'error' => 'Cannot read JSON file'];
+    }
+    
+    $data = json_decode($raw, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return ['ok' => false, 'error' => 'Invalid JSON: ' . json_last_error_msg()];
+    }
+    
+    // Handle both {templates:[]} and {items:[]} formats
+    $templates = $data['templates'] ?? $data['items'] ?? $data;
+    if (!is_array($templates)) {
+        return ['ok' => false, 'error' => 'JSON must contain templates array'];
+    }
+    
+    $loaded = 0;
+    $errors = [];
+    $db = templates_db();
+    
+    foreach ($templates as $tpl) {
+        $name = trim($tpl['name'] ?? '');
+        $type = trim($tpl['type'] ?? 'payload');
+        $text = $tpl['template_text'] ?? $tpl['text'] ?? '';
+        
+        if ($name === '' || $text === '') {
+            $errors[] = 'Skipped invalid template (missing name or text)';
+            continue;
+        }
+        
+        try {
+            $stmt = $db->prepare('INSERT OR REPLACE INTO ai_header_templates (name, type, template_text, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)');
+            $stmt->bindValue(':name', $name, SQLITE3_TEXT);
+            $stmt->bindValue(':type', $type, SQLITE3_TEXT);
+            $stmt->bindValue(':text', $text, SQLITE3_TEXT);
+            // Use question marks since bindValue doesn't work as expected
+            $db->exec("INSERT OR REPLACE INTO ai_header_templates (name, type, template_text, created_at) VALUES ('$name', '$type', '" . $db->escapeString($text) . "', CURRENT_TIMESTAMP)");
+            $loaded++;
+        } catch (Throwable $e) {
+            $errors[] = $name . ': ' . $e->getMessage();
+        }
+    }
+    
+    $db->close();
+    return ['ok' => true, 'loaded' => $loaded, 'errors' => $errors];
+}
+
+function list_templates(): array {
+    $db = templates_db();
+    $res = $db->query('SELECT name, type, created_at FROM ai_header_templates ORDER BY name');
+    $out = [];
+    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+        $out[] = $row;
+    }
+    $db->close();
+    return $out;
+}
+
 // ---- Request Handling ----
 
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -325,6 +409,39 @@ if ($action !== '') {
             }
         }
         echo json_encode(['tools' => $export], JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        exit;
+    }
+    
+    // ---- Template Actions ----
+    if ($action === 'load_templates' && $method === 'POST') {
+        $jsonPath = $_POST['json_path'] ?? '';
+        if ($jsonPath === '') {
+            echo json_encode(['ok' => false, 'error' => 'No JSON path provided']);
+            exit;
+        }
+        $result = load_templates_from_json($jsonPath);
+        echo json_encode($result);
+        exit;
+    }
+    
+    if ($action === 'list_templates' && $method === 'GET') {
+        $templates = list_templates();
+        echo json_encode(['ok' => true, 'templates' => $templates], JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+    
+    if ($action === 'available_template_files' && $method === 'GET') {
+        $dir = __DIR__ . '/AI_Story';
+        $files = [];
+        if (is_dir($dir)) {
+            foreach (glob($dir . '/*.json') as $f) {
+                $name = basename($f);
+                if (strpos($name, 'story_') === 0 || strpos($name, 'template_') === 0) {
+                    $files[] = ['path' => $f, 'name' => $name, 'size' => filesize($f)];
+                }
+            }
+        }
+        echo json_encode(['ok' => true, 'files' => $files]);
         exit;
     }
     
@@ -536,6 +653,23 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
             <a href="/admin/">← Back to Admin</a> |
             <a href="/v1/agent/">Test Agent Endpoint →</a>
         </p>
+        
+        <div class="card" style="margin-top:40px;">
+            <h2 style="margin-top:0">📖 AI Story Templates</h2>
+            <p>Load story templates into <code>ai_header.db</code> for the AI Story feature.</p>
+            
+            <div id="template-files-list" style="margin-bottom:16px;">
+                <p style="color:#8b949e;">Scanning for JSON files...</p>
+            </div>
+            
+            <div id="template-status" style="margin-bottom:16px;"></div>
+            <div id="templates-list" style="margin-bottom:16px;"></div>
+            
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="loadAvailableTemplates()">🔄 Discover Templates</button>
+                <button class="btn btn-secondary" onclick="listLoadedTemplates()">📋 List Loaded</button>
+            </div>
+        </div>
     </div>
     
     <!-- Tool Editor Modal -->
@@ -764,6 +898,92 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                 toast('Error: ' + err.message, 'error');
             } finally {
                 e.target.value = '';
+            }
+        }
+        
+        // ---- Template Functions ----
+        
+        async function loadAvailableTemplates() {
+            try {
+                const resp = await fetch('?action=available_template_files');
+                const data = await resp.json();
+                if (!data.ok || !data.files) {
+                    toast('No template files found in /admin/AI_Story/', 'error');
+                    return;
+                }
+                
+                let html = '<h3 style="margin-top:0;">Available Template Files</h3>';
+                if (data.files.length === 0) {
+                    html += '<p style="color:#8b949e;">No template JSON files found in /admin/AI_Story/</p>';
+                } else {
+                    html += '<table><thead><tr><th>Filename</th><th>Size</th><th>Action</th></tr></thead><tbody>';
+                    for (const f of data.files) {
+                        html += `<tr>
+                            <td><code class="mono">${f.name}</code></td>
+                            <td>${(f.size / 1024).toFixed(1)} KB</td>
+                            <td><button class="btn btn-primary btn-sm" onclick="loadTemplateFile('${f.path}', '${f.name}')">Load</button></td>
+                        </tr>`;
+                    }
+                    html += '</tbody></table>';
+                }
+                document.getElementById('template-files-list').innerHTML = html;
+            } catch (e) {
+                toast('Error: ' + e.message, 'error');
+            }
+        }
+        
+        async function loadTemplateFile(path, name) {
+            if (!confirm(`Load templates from "${name}"?`)) return;
+            
+            try {
+                const resp = await fetch('?', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=load_templates&json_path=' + encodeURIComponent(path)
+                });
+                const data = await resp.json();
+                if (data.ok) {
+                    toast(`Loaded ${data.loaded} templates${data.errors.length > 0 ? ` (${data.errors.length} errors)` : ''}`, 'success');
+                    if (data.errors.length > 0) {
+                        console.warn('Load errors:', data.errors);
+                    }
+                    setTimeout(() => listLoadedTemplates(), 500);
+                } else {
+                    toast(data.error || 'Load failed', 'error');
+                }
+            } catch (e) {
+                toast('Error: ' + e.message, 'error');
+            }
+        }
+        
+        async function listLoadedTemplates() {
+            try {
+                const resp = await fetch('?action=list_templates');
+                const data = await resp.json();
+                if (!data.ok || !data.templates) {
+                    toast('Failed to fetch templates', 'error');
+                    return;
+                }
+                
+                let html = '<h3 style="margin-top:0;">Loaded Templates</h3>';
+                if (data.templates.length === 0) {
+                    html += '<p style="color:#8b949e;">No templates loaded yet. Click "Discover Templates" above.</p>';
+                } else {
+                    html += `<p><strong>${data.templates.length} template(s) loaded</strong></p>`;
+                    html += '<table><thead><tr><th>Name</th><th>Type</th><th>Loaded</th></tr></thead><tbody>';
+                    for (const t of data.templates) {
+                        const loaded = new Date(t.created_at).toLocaleString();
+                        html += `<tr>
+                            <td><code class="mono">${t.name}</code></td>
+                            <td>${t.type}</td>
+                            <td style="color:#8b949e;font-size:12px;">${loaded}</td>
+                        </tr>`;
+                    }
+                    html += '</tbody></table>';
+                }
+                document.getElementById('templates-list').innerHTML = html;
+            } catch (e) {
+                toast('Error: ' + e.message, 'error');
             }
         }
     </script>
