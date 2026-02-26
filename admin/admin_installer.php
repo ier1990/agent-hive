@@ -20,6 +20,24 @@ const REQUIRED_DIRS = [
 ];
 const MIN_DISK_MB = 100;
 
+// Default .env variables
+const ENV_DEFAULTS = [
+        'IER_ROLE' => 'ai-24g',
+        'IER_NODE' => 'lan-default',
+        'IER_VERSION' => '2025-12-25.1',
+        'SECURITY_MODE' => 'lan',
+        'ALLOW_IPS_WITHOUT_KEY' => '127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16',
+        'REQUIRE_KEY_FOR_ALL' => '0',
+        'OPENAI_API_KEY' => '',
+        'OPENAI_BASE_URL' => 'https://api.openai.com/v1',
+        'OPENAI_MODEL' => 'gpt-3.5-turbo',
+        'LLM_BASE_URL' => 'http://127.0.0.1:1234/v1',
+        'LLM_API_KEY' => '',
+        'IER_API_KEY' => '',
+        'OLLAMA_HOST' => 'http://127.0.0.1:11434',
+        'SEARX_URL' => '',
+];
+
 // Process actions
 if ($action === 'check_env') {
         $results['env_check'] = checkEnvironment();
@@ -29,6 +47,109 @@ if ($action === 'check_env') {
         $results['dirs_created'] = createDirectories();
         $_SESSION['install_results'] = $results;
         $step = 3;
+} elseif ($action === 'setup_env') {
+        $results['env_saved'] = setupEnvFile($_POST);
+        $_SESSION['install_results'] = $results;
+        $step = 4;
+}
+
+// Load .env file into associative array
+function loadEnvFile($path = '/web/private/.env') {
+        $out = [];
+        if (!is_file($path)) return $out;
+        
+        $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+                $line = trim($line);
+                if ($line === '' || strpos($line, '#') === 0) continue;
+                
+                if (strpos($line, '=') !== false) {
+                        $parts = explode('=', $line, 2);
+                        $out[trim($parts[0])] = trim($parts[1]);
+                }
+        }
+        return $out;
+}
+
+// Save .env file from POST data
+function setupEnvFile($postData) {
+        $envPath = '/web/private/.env';
+        $envDir = dirname($envPath);
+        
+        $result = [
+                'path' => $envPath,
+                'saved' => false,
+                'error' => null,
+                'updated_keys' => []
+        ];
+        
+        if (!is_dir($envDir)) {
+                $result['error'] = 'Directory ' . $envDir . ' does not exist';
+                return $result;
+        }
+        
+        // Load existing .env if it exists, merge with defaults
+        $existing = loadEnvFile($envPath);
+        $config = array_merge(ENV_DEFAULTS, $existing);
+        
+        // Update from POST data
+        foreach (ENV_DEFAULTS as $key => $default) {
+                if (isset($postData[$key])) {
+                        $newVal = trim($postData[$key]);
+                        if ($newVal !== $config[$key]) {
+                                $config[$key] = $newVal;
+                                $result['updated_keys'][] = $key;
+                        }
+                }
+        }
+        
+        // Build new .env content - preserve structure when possible
+        $lines = [];
+        $processed = [];
+        
+        // If file exists, preserve comments and update values
+        if (is_file($envPath)) {
+                $existing_lines = file($envPath, FILE_IGNORE_NEW_LINES);
+                foreach ($existing_lines as $line) {
+                        $trimmed = trim($line);
+                        
+                        // Preserve comments and blank lines
+                        if ($trimmed === '' || strpos($trimmed, '#') === 0) {
+                                $lines[] = $line;
+                                continue;
+                        }
+                        
+                        // Update config values
+                        if (strpos($trimmed, '=') !== false) {
+                                $parts = explode('=', $trimmed, 2);
+                                $key = trim($parts[0]);
+                                if (isset($config[$key])) {
+                                        $lines[] = $key . '=' . $config[$key];
+                                        $processed[$key] = true;
+                                        continue;
+                                }
+                        }
+                        $lines[] = $line;
+                }
+        }
+        
+        // Append any new keys not in existing file
+        foreach (ENV_DEFAULTS as $key => $val) {
+                if (!isset($processed[$key])) {
+                        $lines[] = $key . '=' . $config[$key];
+                }
+        }
+        
+        // Write file
+        $content = implode("\n", $lines) . "\n";
+        if (@file_put_contents($envPath, $content)) {
+                @chmod($envPath, 0600);  // Secure permissions (read-write owner only)
+                $result['saved'] = true;
+        } else {
+                $result['error'] = 'Failed to write ' . $envPath . ' (check permissions)';
+        }
+        
+        return $result;
 }
 
 // Helper: Generate fix command for missing PHP extensions
@@ -240,7 +361,7 @@ function loadStoryTemplates() {
 </head>
 <body class="bg-gray-900 text-white p-8">
 <div class="max-w-4xl mx-auto">
-<h1 class="text-3xl mb-8">🚀 Admin Installer - Step <?= $step ?>/3</h1>
+<h1 class="text-3xl mb-8">🚀 Admin Installer - Step <?= $step ?>/4</h1>
 
 <?php if ($step === 1): ?>
     <h2 class="text-xl mb-6">🔍 Environment Check</h2>
@@ -330,11 +451,164 @@ function loadStoryTemplates() {
     <?php endif; ?>
 
 <?php elseif ($step === 3): ?>
+    <h2 class="text-xl mb-6">⚙️ Environment Configuration (.env)</h2>
+    <p class="text-gray-400 mb-6">Configure environment variables for API keys, URLs, and security settings.</p>
+
+    <?php
+    // Load current .env values
+    $currentEnv = loadEnvFile('/web/private/.env');
+    $envConfig = array_merge(ENV_DEFAULTS, $currentEnv);
+    $isUpgrade = !empty($currentEnv);
+    ?>
+
+    <div class="bg-blue-900 border border-blue-500 p-4 rounded mb-6">
+        <div class="text-sm text-blue-200">
+            <?= $isUpgrade ? '📝 Upgrading existing .env file' : '✨ Creating new .env file' ?>
+        </div>
+    </div>
+
+    <form method="POST" class="space-y-4">
+        <input type="hidden" name="action" value="setup_env">
+
+        <!-- IER Configuration -->
+        <div class="bg-gray-800 p-4 rounded">
+            <div class="font-bold text-yellow-400 mb-4">🏗️ IER Configuration</div>
+            <div class="space-y-3">
+                <div>
+                    <label class="text-sm text-gray-300">IER_ROLE</label>
+                    <input type="text" name="IER_ROLE" value="<?= htmlspecialchars($envConfig['IER_ROLE']) ?>" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                    <div class="text-xs text-gray-500 mt-1">e.g: ai-24g, ai-8g, inference-node</div>
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">IER_NODE</label>
+                    <input type="text" name="IER_NODE" value="<?= htmlspecialchars($envConfig['IER_NODE']) ?>" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                    <div class="text-xs text-gray-500 mt-1">e.g: lan-142, production-01</div>
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">IER_VERSION</label>
+                    <input type="text" name="IER_VERSION" value="<?= htmlspecialchars($envConfig['IER_VERSION']) ?>" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                    <div class="text-xs text-gray-500 mt-1">Format: YYYY-MM-DD.N</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Security -->
+        <div class="bg-gray-800 p-4 rounded">
+            <div class="font-bold text-yellow-400 mb-4">🔐 Security</div>
+            <div class="space-y-3">
+                <div>
+                    <label class="text-sm text-gray-300">SECURITY_MODE</label>
+                    <select name="SECURITY_MODE" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                        <option value="lan" <?= $envConfig['SECURITY_MODE'] === 'lan' ? 'selected' : '' ?>>LAN (trust RFC1918 IPs)</option>
+                        <option value="public" <?= $envConfig['SECURITY_MODE'] === 'public' ? 'selected' : '' ?>>Public (require API keys)</option>
+                    </select>
+                    <div class="text-xs text-gray-500 mt-1">LAN mode allows local IPs without keys</div>
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">ALLOW_IPS_WITHOUT_KEY</label>
+                    <textarea name="ALLOW_IPS_WITHOUT_KEY" rows="2" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1 font-mono text-xs"><?= htmlspecialchars($envConfig['ALLOW_IPS_WITHOUT_KEY']) ?></textarea>
+                    <div class="text-xs text-gray-500 mt-1">Comma-separated CIDR blocks (only used in LAN mode)</div>
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">REQUIRE_KEY_FOR_ALL</label>
+                    <select name="REQUIRE_KEY_FOR_ALL" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                        <option value="0" <?= $envConfig['REQUIRE_KEY_FOR_ALL'] === '0' ? 'selected' : '' ?>>No (allow LAN IPs)</option>
+                        <option value="1" <?= $envConfig['REQUIRE_KEY_FOR_ALL'] === '1' ? 'selected' : '' ?>>Yes (require keys always)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Keys -->
+        <div class="bg-gray-800 p-4 rounded">
+            <div class="font-bold text-yellow-400 mb-4">🔑 API Keys</div>
+            <div class="space-y-3">
+                <div>
+                    <label class="text-sm text-gray-300">IER_API_KEY</label>
+                    <input type="text" name="IER_API_KEY" value="<?= htmlspecialchars($envConfig['IER_API_KEY']) ?>" placeholder="Leave empty to skip" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1 font-mono text-sm">
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">OPENAI_API_KEY</label>
+                    <input type="password" name="OPENAI_API_KEY" value="<?= htmlspecialchars($envConfig['OPENAI_API_KEY']) ?>" placeholder="Leave empty to skip" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1 font-mono text-sm">
+                    <div class="text-xs text-gray-500 mt-1">sk-proj-... from OpenAI</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Model URLs -->
+        <div class="bg-gray-800 p-4 rounded">
+            <div class="font-bold text-yellow-400 mb-4">🤖 Model Services</div>
+            <div class="space-y-3">
+                <div>
+                    <label class="text-sm text-gray-300">LLM_BASE_URL</label>
+                    <input type="text" name="LLM_BASE_URL" value="<?= htmlspecialchars($envConfig['LLM_BASE_URL']) ?>" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                    <div class="text-xs text-gray-500 mt-1">e.g: http://127.0.0.1:1234/v1 (LM Studio)</div>
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">LLM_API_KEY</label>
+                    <input type="text" name="LLM_API_KEY" value="<?= htmlspecialchars($envConfig['LLM_API_KEY']) ?>" placeholder="e.g: lm-studio" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">OPENAI_BASE_URL</label>
+                    <input type="text" name="OPENAI_BASE_URL" value="<?= htmlspecialchars($envConfig['OPENAI_BASE_URL']) ?>" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">OPENAI_MODEL</label>
+                    <input type="text" name="OPENAI_MODEL" value="<?= htmlspecialchars($envConfig['OPENAI_MODEL']) ?>" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">OLLAMA_HOST</label>
+                    <input type="text" name="OLLAMA_HOST" value="<?= htmlspecialchars($envConfig['OLLAMA_HOST']) ?>" placeholder="Leave empty if not using Ollama" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                </div>
+            </div>
+        </div>
+
+        <!-- Optional Search -->
+        <div class="bg-gray-800 p-4 rounded">
+            <div class="font-bold text-yellow-400 mb-4">🔍 Optional Services</div>
+            <div>
+                <label class="text-sm text-gray-300">SEARX_URL</label>
+                <input type="text" name="SEARX_URL" value="<?= htmlspecialchars($envConfig['SEARX_URL']) ?>" placeholder="Leave empty if not using Searx" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1">
+                <div class="text-xs text-gray-500 mt-1">e.g: http://192.168.0.142:3000</div>
+            </div>
+        </div>
+
+        <div class="flex gap-4 mt-8">
+            <button type="submit" class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded font-bold flex-1">
+                ✅ Save Configuration
+            </button>
+            <a href="?step=2" class="inline-block bg-gray-600 hover:bg-gray-700 px-6 py-3 rounded font-bold">
+                ← Back
+            </a>
+        </div>
+    </form>
+
+<?php elseif ($step === 4): ?>
     <h2 class="text-xl mb-6">✅ Installation Complete</h2>
     <div class="bg-green-900 border border-green-500 p-6 rounded mb-6">
         <div class="text-2xl mb-2">🎉 Success!</div>
         <p>Environment checks passed and directories created.</p>
     </div>
+    
+    <?php
+    // Show .env save result if applicable
+    if (!empty($results['env_saved'])) {
+        $envResult = $results['env_saved'];
+    ?>
+        <div class="mb-6 p-4 rounded border <?= $envResult['saved'] ? 'bg-green-900 border-green-500' : 'bg-red-900 border-red-500' ?>">
+            <div class="font-bold mb-2">⚙️ Environment Configuration</div>
+            <div class="text-sm <?= $envResult['saved'] ? 'text-green-200' : 'text-red-200' ?>">
+                <?php if ($envResult['saved']): ?>
+                    <div>✓ Configuration saved to: <span class="font-mono text-xs"><?= $envResult['path'] ?></span></div>
+                    <?php if (!empty($envResult['updated_keys'])): ?>
+                        <div class="text-xs text-green-300 mt-2">Updated keys: <?= implode(', ', $envResult['updated_keys']) ?></div>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <div>✗ Error: <?= $envResult['error'] ?></div>
+                <?php endif; ?>
+            </div>
+        </div>
+    <?php } ?>
     
     <?php
     // Try to load story templates automatically
