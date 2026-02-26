@@ -11,6 +11,16 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 if (empty($_SESSION['csrf_ai_setup'])) { $_SESSION['csrf_ai_setup'] = bin2hex(random_bytes(32)); }
 function csrf_input(){ echo '<input type="hidden" name="csrf_token" value="'.h($_SESSION['csrf_ai_setup']).'">'; }
 function csrf_valid($t){ return isset($_SESSION['csrf_ai_setup']) && hash_equals($_SESSION['csrf_ai_setup'], (string)$t); }
+function ai_active_profile_candidate(array $active): array {
+  $raw = isset($active['raw']) && is_array($active['raw']) ? $active['raw'] : [];
+  return [
+    'provider' => (string)($raw['provider'] ?? ($active['provider'] ?? '')),
+    'base_url' => (string)($raw['base_url'] ?? ($active['base_url'] ?? '')),
+    'api_key' => (string)($raw['api_key'] ?? ($active['api_key'] ?? '')),
+    'model' => (string)($raw['model'] ?? ($active['model'] ?? '')),
+    'timeout_seconds' => (int)($raw['model_timeout_seconds'] ?? ($active['timeout_seconds'] ?? 120)),
+  ];
+}
 
 $action = $_POST['action'] ?? ($_GET['action'] ?? '');
 $errors = [];
@@ -119,13 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_valid($_POST['csrf_token'] ?? 
     if ($hash) {
       // Check if it's the active connection
       $active = ai_settings_get();
-      $activeHash = ai_saved_profiles_hash([
-        'provider' => $active['provider'] ?? '',
-        'base_url' => $active['base_url'] ?? '',
-        'api_key' => $active['api_key'] ?? '',
-        'model' => $active['model'] ?? '',
-        'timeout_seconds' => $active['timeout_seconds'] ?? 120,
-      ]);
+      $activeHash = ai_saved_profiles_hash(ai_active_profile_candidate($active));
       
       if ($hash === $activeHash) {
         $errors[] = 'Cannot delete active connection. Switch to another connection first.';
@@ -165,13 +169,8 @@ if ($editHash) {
 
 // Current active settings
 $active = ai_settings_get();
-$activeHash = ai_saved_profiles_hash([
-  'provider' => $active['provider'] ?? '',
-  'base_url' => $active['base_url'] ?? '',
-  'api_key' => $active['api_key'] ?? '',
-  'model' => $active['model'] ?? '',
-  'timeout_seconds' => $active['timeout_seconds'] ?? 120,
-]);
+$activeProfileCandidate = ai_active_profile_candidate($active);
+$activeHash = ai_saved_profiles_hash($activeProfileCandidate);
 
 // Recent connections
 $connections = ai_saved_profiles_recent(20);
@@ -244,9 +243,9 @@ $presets = [
                 $cModel = (string)($c['model'] ?? '');
                 $cBase = rtrim((string)($c['base_url'] ?? ''), '/');
                 
-                $aProvider = strtolower($active['provider'] ?? '');
-                $aModel = (string)($active['model'] ?? '');
-                $aBase = rtrim((string)($active['base_url'] ?? ''), '/');
+                $aProvider = strtolower((string)($activeProfileCandidate['provider'] ?? ''));
+                $aModel = (string)($activeProfileCandidate['model'] ?? '');
+                $aBase = rtrim((string)($activeProfileCandidate['base_url'] ?? ''), '/');
                 // Normalize both to exclude /v1
                 $aBase = preg_replace('~/v1$~', '', $aBase);
                 
@@ -566,6 +565,11 @@ $presets = [
       // Track when user manually edits the URL field
       const baseUrlField = document.getElementById('base_url');
       if (baseUrlField) {
+        const originalUrl = (baseUrlField.getAttribute('data-original') || '').trim();
+        if (originalUrl !== '') {
+          // Server-provided URL (for example after "Test Connection") should be preserved.
+          userEditedUrl = true;
+        }
         baseUrlField.addEventListener('input', function() {
           userEditedUrl = true;
         });

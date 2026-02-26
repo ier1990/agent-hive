@@ -127,6 +127,9 @@ try {
 }
 
 
+// Initialize schema (ensures all required tables exist)
+cw_cwdb_init($pdo);
+
 // Ensure applied_rewrites table exists
 $pdo->exec("CREATE TABLE IF NOT EXISTS applied_rewrites (
   action_id INTEGER PRIMARY KEY,

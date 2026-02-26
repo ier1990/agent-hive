@@ -123,15 +123,17 @@ if (!function_exists('ai_settings_get')) {
     $ollamaBase = (string)($raw['ollama_base_url'] ?? '');
 
     if ($provider === 'openai') {
-      $baseResolved = $envOpenaiBase ?: ($openaiBase ?: 'https://api.openai.com');
+      $baseResolved = $openaiBase ?: ($envOpenaiBase ?: 'https://api.openai.com');
       $baseResolved = ai_base_ensure_v1($baseResolved);
-      $keyResolved = $envOpenaiKey ?: (string)($raw['api_key'] ?? '');
-      $modelResolved = $envOpenaiModel ?: ($model ?: 'gpt-4o-mini');
+      $keyResolved = (string)($raw['api_key'] ?? '');
+      if ($keyResolved === '') $keyResolved = $envOpenaiKey;
+      $modelResolved = $model ?: ($envOpenaiModel ?: 'gpt-4o-mini');
     } elseif ($provider === 'ollama') {
-      $baseResolved = $envOllamaBase ?: ($ollamaBase ?: ($llmBase ?: $base));
+      $baseResolved = $ollamaBase ?: ($llmBase ?: ($base ?: ($envOllamaBase ?: $envLlmBase)));
       if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:11434';
       $baseResolved = ai_base_ensure_v1($baseResolved);
-      $keyResolved = $envLlmKey ?: (string)($raw['api_key'] ?? '');
+      $keyResolved = (string)($raw['api_key'] ?? '');
+      if ($keyResolved === '') $keyResolved = $envLlmKey;
       $modelResolved = $model ?: 'llama3';
     } else {
       // All other providers: local, openrouter, anthropic, custom, etc.
@@ -139,9 +141,10 @@ if (!function_exists('ai_settings_get')) {
       // For openrouter, anthropic, custom: only use database values (no env override)
       
       if ($provider === 'local' || $provider === 'lmstudio') {
-        $baseResolved = $envLlmBase ?: ($llmBase ?: $base);
+        $baseResolved = $llmBase ?: ($base ?: $envLlmBase);
         if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:1234';
-        $keyResolved = $envLlmKey ?: (string)($raw['api_key'] ?? '');
+        $keyResolved = (string)($raw['api_key'] ?? '');
+        if ($keyResolved === '') $keyResolved = $envLlmKey;
       } else {
         // openrouter, anthropic, custom: use database values only
         $baseResolved = $base;
@@ -219,21 +222,24 @@ if (!function_exists('ai_settings_resolve_for_provider')) {
     $ollamaBase = (string)($raw['ollama_base_url'] ?? '');
 
     if ($provider === 'openai') {
-      $baseResolved = $envOpenaiBase ?: ($openaiBase ?: 'https://api.openai.com');
+      $baseResolved = $openaiBase ?: ($envOpenaiBase ?: 'https://api.openai.com');
       $baseResolved = ai_base_ensure_v1($baseResolved);
-      $keyResolved = $envOpenaiKey ?: (string)($raw['api_key'] ?? '');
-      $modelResolved = $envOpenaiModel ?: ($rawModel ?: 'gpt-4o-mini');
+      $keyResolved = (string)($raw['api_key'] ?? '');
+      if ($keyResolved === '') $keyResolved = $envOpenaiKey;
+      $modelResolved = $rawModel ?: ($envOpenaiModel ?: 'gpt-4o-mini');
     } elseif ($provider === 'anthropic') {
       // Anthropic provider
-      $baseResolved = $envOpenaiBase ?: ($base ?: 'https://api.anthropic.com');
+      $baseResolved = $base ?: ($envOpenaiBase ?: 'https://api.anthropic.com');
       $baseResolved = ai_base_ensure_v1($baseResolved);
-      $keyResolved = $envOpenaiKey ?: (string)($raw['api_key'] ?? '');
+      $keyResolved = (string)($raw['api_key'] ?? '');
+      if ($keyResolved === '') $keyResolved = $envOpenaiKey;
       $modelResolved = $rawModel ?: 'claude-3-5-sonnet-20241022';
     } elseif ($provider === 'openrouter') {
       // OpenRouter provider
       $baseResolved = $base ?: 'https://openrouter.ai/api/v1';
       $baseResolved = ai_base_ensure_v1($baseResolved);
-      $keyResolved = $envOpenaiKey ?: (string)($raw['api_key'] ?? '');
+      $keyResolved = (string)($raw['api_key'] ?? '');
+      if ($keyResolved === '') $keyResolved = $envOpenaiKey;
       $modelResolved = $rawModel ?: 'openai/gpt-4-turbo';
     } elseif ($provider === 'custom') {
       // Custom provider - requires base_url
@@ -244,17 +250,19 @@ if (!function_exists('ai_settings_resolve_for_provider')) {
       $keyResolved = (string)($raw['api_key'] ?? '');
       $modelResolved = $rawModel ?: '';
     } elseif ($provider === 'ollama') {
-      $baseResolved = $envOllamaBase ?: ($ollamaBase ?: ($envLlmBase ?: ($llmBase ?: $base)));
+      $baseResolved = $ollamaBase ?: ($llmBase ?: ($base ?: ($envOllamaBase ?: $envLlmBase)));
       if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:11434';
       $baseResolved = ai_base_ensure_v1($baseResolved);
-      $keyResolved = $envLlmKey ?: (string)($raw['api_key'] ?? '');
+      $keyResolved = (string)($raw['api_key'] ?? '');
+      if ($keyResolved === '') $keyResolved = $envLlmKey;
       $modelResolved = $rawModel ?: 'llama3';
     } else {
       // Local (LM Studio) - default
-      $baseResolved = $envLlmBase ?: ($llmBase ?: $base);
+      $baseResolved = $llmBase ?: ($base ?: $envLlmBase);
       if ($baseResolved === '') $baseResolved = 'http://127.0.0.1:1234';
       $baseResolved = ai_base_ensure_v1($baseResolved);
-      $keyResolved = $envLlmKey ?: (string)($raw['api_key'] ?? '');
+      $keyResolved = (string)($raw['api_key'] ?? '');
+      if ($keyResolved === '') $keyResolved = $envLlmKey;
       $modelResolved = $rawModel ?: 'openai/gpt-oss-20b';
     }
 

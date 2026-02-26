@@ -74,11 +74,12 @@ function ai_chat_call_openai_compat(array $settings, string $model, array $messa
   }
 
   $provider = strtolower(trim((string)($settings['provider'] ?? '')));
+  $isOllamaLike = ($provider === 'ollama') || (bool)preg_match('~:11434(?:/|$)~', $base);
 
   // Build the correct endpoint URL based on provider
-  if ($provider === 'ollama') {
+  if ($isOllamaLike) {
     // Ollama native: base/api/chat (streaming disabled below)
-    $url = $base . '/api/chat';
+    $url = preg_match('~/v1$~', $base) ? substr($base, 0, -3) . '/api/chat' : $base . '/api/chat';
   } else {
     // OpenAI-compatible: ensure /v1/chat/completions
     if (!preg_match('~/v1$~', $base)) {
@@ -92,11 +93,11 @@ function ai_chat_call_openai_compat(array $settings, string $model, array $messa
     'messages' => $messages,
     'temperature' => $temperature,
   ];
-  if ($maxTokens > 0 && $provider !== 'ollama') {
+  if ($maxTokens > 0 && !$isOllamaLike) {
     $payload['max_tokens'] = $maxTokens;
   }
   // Ollama streams by default — disable it
-  if ($provider === 'ollama') {
+  if ($isOllamaLike) {
     $payload['stream'] = false;
     if ($maxTokens > 0) {
       $payload['options'] = ['num_predict' => $maxTokens];

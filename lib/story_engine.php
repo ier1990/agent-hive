@@ -359,13 +359,14 @@ if (!function_exists('story_ai_chat')) {
     $base = rtrim((string)($s['base_url'] ?? ''), '/');
     $model = (string)($s['model'] ?? 'openai/gpt-oss-20b');
     $apiKey = (string)($s['api_key'] ?? '');
+    $isOllamaLike = ($provider === 'ollama') || (bool)preg_match('~:11434(?:/|$)~', $base);
 
     $temperature = isset($options['temperature']) ? (float)$options['temperature'] : 0.7;
     $maxTokens = isset($options['max_tokens']) ? (int)$options['max_tokens'] : 900;
     $timeout = isset($s['timeout_seconds']) ? (int)$s['timeout_seconds'] : 120;
     if ($timeout < 1) $timeout = 120;
 
-    if ($provider === 'ollama') {
+    if ($isOllamaLike) {
       $url = preg_match('~/v1$~', $base) ? substr($base, 0, -3) . '/api/chat' : $base . '/api/chat';
       $payload = [
         'model' => $model,
