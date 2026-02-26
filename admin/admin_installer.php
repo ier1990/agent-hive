@@ -377,9 +377,9 @@ function loadStoryTemplates() {
                     <div class="font-bold text-yellow-400">1. Create Wrapper Scripts</div>
                     <div class="text-sm text-gray-400 mt-1">Generates executable wrappers in /web/private/scripts/ for all source scripts</div>
                     <div class="font-mono bg-gray-900 p-2 rounded mt-2 text-xs text-green-400">
-                        sudo -i
-                        cd /web/html/src/scripts
-                        bash ./root_update_scripts.sh
+                        sudo -i<br>
+                        cd /web/html/src/scripts<br>
+                        bash ./root_update_scripts.sh<br>
                     </div>
                     <div class="text-xs text-gray-500 mt-2">
                         Location: <span class="font-mono">/web/html/src/scripts/root_update_scripts.sh</span><br/>

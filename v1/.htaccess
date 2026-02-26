@@ -5,38 +5,40 @@ RewriteBase /v1/
 # Block dotfiles (e.g. .env) from being served under /v1
 RewriteRule (^|/)\.[^/]+ - [F,L]
 
-# Normalize trailing slash: /v1/ping/ -> /v1/ping
-RewriteCond %{REQUEST_FILENAME} !-d
+# Canonical API paths are slashless: /v1/ping/ -> /v1/ping
+# Keep this before endpoint rules and exclude root.
 RewriteRule ^(.+)/$ $1 [R=301,L]
 
 # Block direct .php (browser/client requests). Includes still work.
 RewriteCond %{THE_REQUEST} \s/+v1/.*\.php[\s?] [NC]
 RewriteRule ^ - [R=404,L]
 
-# Core endpoints (explicit)
-RewriteRule ^ping$      ping.php      [QSA,NC,L]
-RewriteRule ^health$    health.php    [QSA,NC,L]
-RewriteRule ^models$    models.php    [QSA,NC,L]
-RewriteRule ^inbox$     inbox.php     [QSA,NC,L]
+# Core endpoints (explicit, current directory layout)
+RewriteRule ^ping/?$      ping/index.php      [QSA,NC,L]
+RewriteRule ^health/?$    health/index.php    [QSA,NC,L]
+RewriteRule ^models/?$    models/index.php    [QSA,NC,L]
+RewriteRule ^inbox/?$     inbox/index.php     [QSA,NC,L]
 
 # OpenAI-compatible chat completions shim
 RewriteRule ^chat/completions$ chat/completions/index.php [QSA,NC,L]
 
-# Existing routes
-RewriteRule ^pull(?:/(.*))?$        pull.php?after=$1     [QSA,NC,L]
-RewriteRule ^push(?:/(.*))?$        push.php?after=$1     [QSA,NC,L]
-RewriteRule ^receiving$             receiving.php         [QSA,NC,L]
-RewriteRule ^incoming$              reque.php             [QSA,NC,L]
-RewriteRule ^incoming/req/([A-Fa-f0-9]{32})$ reque.php?req_id=$1 [QSA,NC,L]
-RewriteRule ^outgoing/([A-Fa-f0-9]{32})$ outgoing.php?req_id=$1  [QSA,NC,L]
-RewriteRule ^answer$                answer.php            [QSA,NC,L]
-RewriteRule ^search$                search.php            [QSA,NC,L]
+# Existing routes (current layout)
+RewriteRule ^receiving/?$           receiving/receiving.php [QSA,NC,L]
+RewriteRule ^answer/?$              answer/index.php        [QSA,NC,L]
+RewriteRule ^search/?$              search/index.php        [QSA,NC,L]
 
 # Server coordination
 RewriteRule ^servers(?:/(.*))?$     servers/index.php?after=$1 [QSA,NC,L]
 
 # Releases (directory router)
 RewriteRule ^releases(?:/(.*))?$    releases/index.php?after=$1 [QSA,NC,L]
+
+# Story routes
+RewriteRule ^story/?$               story.php                [QSA,NC,L]
+RewriteRule ^story/create/?$        story/create.php         [QSA,NC,L]
+RewriteRule ^story/turn/?$          story/turn.php           [QSA,NC,L]
+RewriteRule ^story/list/?$          story/list.php           [QSA,NC,L]
+RewriteRule ^story/relay/?$         story/relay.php          [QSA,NC,L]
 
 # Front controller (only for unknown routes)
 RewriteCond %{REQUEST_FILENAME} !-f

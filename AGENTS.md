@@ -43,6 +43,13 @@ When editing PHP, assume **PHP 7.3**:
 - Keep paths deterministic (`/web/html`, `/web/private`) and avoid host-specific assumptions.
 - Keep endpoints backward compatible under the `/v1/*` contract unless explicitly changing the API.
 
+## Routing guardrails (/v1)
+
+- Treat `/v1/*` as API routes with **slashless canonical paths**.
+- Keep `/v1/foo/` redirecting to `/v1/foo` (preserving query strings), not the other way around.
+- When adding routes, prefer explicit rewrites to current `*/index.php` layout (or explicit route files) over legacy flat `*.php` rewrites.
+- Do not reintroduce legacy `/v1/*.php` public route rewrites unless the file actually exists and is intentionally public.
+
 ## Smoke checks (manual)
 
 Common quick checks after changes:
