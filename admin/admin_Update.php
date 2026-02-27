@@ -37,10 +37,10 @@ $UPDATABLE_TARGETS = [
         'dest'    => APP_ROOT . '/admin',
         'enabled' => true,
     ],
-    'apps' => [
-        'label'   => 'Apps (apps/)',
-        'src'     => 'apps',
-        'dest'    => APP_ROOT . '/apps',
+    'scripts' => [
+        'label'   => 'Source Scripts (src/scripts/)',
+        'src'     => 'src/scripts',
+        'dest'    => APP_ROOT . '/src/scripts',
         'enabled' => true,
     ],
 ];
@@ -263,6 +263,134 @@ function update_cleanup(string $dir): void {
     exec('rm -rf ' . escapeshellarg($dir) . ' 2>/dev/null');
 }
 
+function update_target_is_writable(string $destDir): bool {
+    if (is_dir($destDir)) {
+        return is_writable($destDir);
+    }
+    $parent = dirname($destDir);
+    return is_dir($parent) && is_writable($parent);
+}
+
+function update_prepare_release_tree(array $latest): array {
+    $filename = (string)($latest['filename'] ?? '');
+    $sha256 = (string)($latest['sha256'] ?? '');
+    if ($filename === '') {
+        return ['ok' => false, 'error' => 'No filename in release info'];
+    }
+
+    $tmpDir = update_tmp_dir();
+    $tarPath = $tmpDir . '/' . $filename;
+
+    $dl = update_download_tarball($filename, $tarPath);
+    if (empty($dl['ok'])) {
+        update_cleanup($tmpDir);
+        return ['ok' => false, 'error' => (string)($dl['error'] ?? 'Download failed')];
+    }
+
+    if (!update_verify_sha256($tarPath, $sha256)) {
+        update_cleanup($tmpDir);
+        return ['ok' => false, 'error' => 'SHA256 checksum mismatch'];
+    }
+
+    $extractDir = $tmpDir . '/extract';
+    $ext = update_extract_tarball($tarPath, $extractDir);
+    if (empty($ext['ok'])) {
+        update_cleanup($tmpDir);
+        return ['ok' => false, 'error' => (string)($ext['error'] ?? 'Extract failed')];
+    }
+
+    $appRoot = $extractDir . '/' . UPDATE_APP_NAME;
+    if (!is_dir($appRoot)) {
+        $appRoot = $extractDir;
+    }
+    if (!is_dir($appRoot)) {
+        update_cleanup($tmpDir);
+        return ['ok' => false, 'error' => 'Extracted app root not found'];
+    }
+
+    return [
+        'ok' => true,
+        'tmp_dir' => $tmpDir,
+        'app_root' => $appRoot,
+        'tar_path' => $tarPath,
+        'filename' => $filename,
+    ];
+}
+
+function update_preview_target_changes(string $srcDir, string $destDir): array {
+    if (!is_dir($srcDir)) {
+        return ['ok' => false, 'error' => 'Source missing'];
+    }
+    if (!is_dir($destDir)) {
+        return ['ok' => true, 'changed' => 0, 'created' => 0, 'updated' => 0, 'missing_dest' => true, 'sample' => []];
+    }
+
+    $rsync = trim((string)shell_exec('which rsync 2>/dev/null'));
+    if ($rsync === '') {
+        return ['ok' => false, 'error' => 'rsync not found for preview'];
+    }
+
+    $cmd = sprintf(
+        "rsync -ain --no-perms --no-owner --no-group --out-format='%%i %%n' %s/ %s/ 2>/dev/null",
+        escapeshellarg(rtrim($srcDir, '/')),
+        escapeshellarg(rtrim($destDir, '/'))
+    );
+    $out = [];
+    $ret = 0;
+    exec($cmd, $out, $ret);
+    if ($ret !== 0) {
+        return ['ok' => false, 'error' => 'rsync preview failed'];
+    }
+
+    $created = 0;
+    $updated = 0;
+    $sample = [];
+    foreach ($out as $line) {
+        $line = trim((string)$line);
+        if ($line === '' || strpos($line, 'sending incremental file list') !== false) continue;
+        if (strpos($line, 'sent ') === 0 || strpos($line, 'total size is ') === 0) continue;
+
+        $parts = preg_split('/\s+/', $line, 2);
+        $sig = isset($parts[0]) ? (string)$parts[0] : '';
+        $name = isset($parts[1]) ? (string)$parts[1] : '';
+        if ($name === '' || substr($name, -1) === '/') continue;
+        if (strpos($sig, '>f') !== 0 && strpos($sig, 'c') !== 0) continue;
+
+        if (strpos($sig, '+++++++++') !== false) $created++;
+        else $updated++;
+
+        if (count($sample) < 20) $sample[] = $name;
+    }
+
+    return [
+        'ok' => true,
+        'changed' => $created + $updated,
+        'created' => $created,
+        'updated' => $updated,
+        'sample' => $sample,
+    ];
+}
+
+function update_manual_rsync_commands(string $filename, string $version, array $selected, array $targets): string {
+    $lines = [];
+    $lines[] = '# Manual upgrade (no --delete). Run as root/sudo on target server.';
+    $lines[] = 'REL="/web/private/releases/' . UPDATE_APP_NAME . '/' . $filename . '"';
+    $lines[] = 'TMP="/tmp/update_' . UPDATE_APP_NAME . '_$(date +%s)"';
+    $lines[] = 'sudo mkdir -p "$TMP"';
+    $lines[] = 'sudo tar -xzf "$REL" -C "$TMP"';
+    $lines[] = 'if [ -d "$TMP/' . UPDATE_APP_NAME . '" ]; then SRC="$TMP/' . UPDATE_APP_NAME . '"; else SRC="$TMP"; fi';
+    foreach ($selected as $key) {
+        if (!isset($targets[$key])) continue;
+        $cfg = $targets[$key];
+        $lines[] = 'sudo rsync -av "$SRC/' . $cfg['src'] . '/" "' . $cfg['dest'] . '/"';
+    }
+    if ($version !== '') {
+        $lines[] = 'echo "' . $version . '" | sudo tee /web/html/VERSION >/dev/null';
+    }
+    $lines[] = 'sudo rm -rf "$TMP"';
+    return implode("\n", $lines);
+}
+
 // ---- Request handling ----
 
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -273,7 +401,68 @@ if ($action === 'check') {
     header('Content-Type: application/json; charset=utf-8');
     $info = update_fetch_latest_info();
     $info['current_version'] = update_read_current_version();
+    $writeMap = [];
+    foreach ($UPDATABLE_TARGETS as $k => $cfg) {
+        $writeMap[$k] = [
+            'dest' => (string)$cfg['dest'],
+            'writable' => update_target_is_writable((string)$cfg['dest']),
+        ];
+    }
+    $info['write_targets'] = $writeMap;
     echo json_encode($info, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($method === 'POST' && $action === 'preview') {
+    header('Content-Type: application/json; charset=utf-8');
+    $selected = $_POST['targets'] ?? [];
+    if (!is_array($selected) || empty($selected)) {
+        echo json_encode(['ok' => false, 'error' => 'No targets selected']);
+        exit;
+    }
+    foreach ($selected as $key) {
+        if (!isset($UPDATABLE_TARGETS[$key]) || !$UPDATABLE_TARGETS[$key]['enabled']) {
+            echo json_encode(['ok' => false, 'error' => "Invalid target: $key"]);
+            exit;
+        }
+    }
+
+    $info = update_fetch_latest_info();
+    if (empty($info['ok']) || empty($info['latest'])) {
+        echo json_encode(['ok' => false, 'error' => (string)($info['error'] ?? 'No release info available')]);
+        exit;
+    }
+    $latest = (array)$info['latest'];
+    $prep = update_prepare_release_tree($latest);
+    if (empty($prep['ok'])) {
+        echo json_encode(['ok' => false, 'error' => (string)($prep['error'] ?? 'Preview preparation failed')]);
+        exit;
+    }
+
+    $appRoot = (string)$prep['app_root'];
+    $results = [];
+    $writeMap = [];
+    foreach ($selected as $key) {
+        $cfg = $UPDATABLE_TARGETS[$key];
+        $srcPath = $appRoot . '/' . $cfg['src'];
+        $destPath = (string)$cfg['dest'];
+        $results[$key] = update_preview_target_changes($srcPath, $destPath);
+        $writeMap[$key] = update_target_is_writable($destPath);
+    }
+    update_cleanup((string)$prep['tmp_dir']);
+
+    $filename = (string)($latest['filename'] ?? '');
+    $version = (string)($latest['version'] ?? '');
+    $manual = update_manual_rsync_commands($filename, $version, $selected, $UPDATABLE_TARGETS);
+
+    echo json_encode([
+        'ok' => true,
+        'preview' => $results,
+        'version' => $version,
+        'filename' => $filename,
+        'write_targets' => $writeMap,
+        'manual_commands' => $manual,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -317,44 +506,35 @@ if ($method === 'POST' && $action === 'update') {
         exit;
     }
     
-    // 2) Create temp dir
-    $tmpDir = update_tmp_dir();
-    $tarPath = $tmpDir . '/' . $filename;
-    
-    // 3) Download tarball
-    $dl = update_download_tarball($filename, $tarPath);
-    if (empty($dl['ok'])) {
-        update_cleanup($tmpDir);
-        $err = $dl['error'] ?? 'Download failed';
+    $prep = update_prepare_release_tree($latest);
+    if (empty($prep['ok'])) {
+        $err = (string)($prep['error'] ?? 'Failed preparing release');
         update_log("Update failed: $err");
         echo json_encode(['ok' => false, 'error' => $err]);
         exit;
     }
-    
-    // 4) Verify checksum
-    if (!update_verify_sha256($tarPath, $sha256)) {
-        update_cleanup($tmpDir);
-        update_log('Update failed: SHA256 mismatch');
-        echo json_encode(['ok' => false, 'error' => 'SHA256 checksum mismatch']);
-        exit;
+    $tmpDir = (string)$prep['tmp_dir'];
+    $appRoot = (string)$prep['app_root'];
+
+    $blocked = [];
+    foreach ($selected as $key) {
+        $destPath = (string)$UPDATABLE_TARGETS[$key]['dest'];
+        if (!update_target_is_writable($destPath)) {
+            $blocked[] = $key;
+        }
     }
-    
-    // 5) Extract tarball
-    $extractDir = $tmpDir . '/extract';
-    $ext = update_extract_tarball($tarPath, $extractDir);
-    if (empty($ext['ok'])) {
+    if (!empty($blocked)) {
+        $manual = update_manual_rsync_commands($filename, $version, $selected, $UPDATABLE_TARGETS);
         update_cleanup($tmpDir);
-        $err = $ext['error'] ?? 'Extract failed';
-        update_log("Update failed: $err");
-        echo json_encode(['ok' => false, 'error' => $err]);
+        $err = 'Web user cannot write target(s): ' . implode(', ', $blocked);
+        update_log("Update blocked: $err");
+        echo json_encode([
+            'ok' => false,
+            'manual_required' => true,
+            'error' => $err,
+            'manual_commands' => $manual,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         exit;
-    }
-    
-    // Find the root folder in extract (usually "html" for app=html)
-    $appRoot = $extractDir . '/' . UPDATE_APP_NAME;
-    if (!is_dir($appRoot)) {
-        // Maybe tarball extracts directly without subfolder
-        $appRoot = $extractDir;
     }
     
     // 6) Sync selected targets
@@ -574,12 +754,24 @@ $currentVersion = update_read_current_version();
         .log .line { margin: 2px 0; }
         .log .line.ok { color: #4ade80; }
         .log .line.err { color: #fca5a5; }
+        .manual-box {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 12px;
+            margin-top: 12px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            display: none;
+        }
+        .manual-box.visible { display: block; }
         a { color: #00d9ff; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔄 System Update</h1>
+        <h1>🔄 System Update Preview</h1>
         
         <div class="card">
             <h2>Version Information</h2>
@@ -601,7 +793,7 @@ $currentVersion = update_read_current_version();
         
         <div class="card">
             <h2>Update Targets</h2>
-            <p>Select which components to update:</p>
+            <p>This page is preview-only. Select targets to estimate file changes against the latest cached release.</p>
             <ul class="targets-list">
                 <?php foreach ($UPDATABLE_TARGETS as $key => $cfg): ?>
                 <?php if (!$cfg['enabled']) continue; ?>
@@ -616,10 +808,34 @@ $currentVersion = update_read_current_version();
                 <?php endforeach; ?>
             </ul>
             <div class="btn-group">
-                <button class="btn btn-primary" id="update-btn" onclick="runUpdate()">Run Update</button>
+                <button class="btn btn-secondary" id="preview-btn" onclick="runPreview()">Preview Changes</button>
             </div>
             <div class="status" id="update-status"></div>
             <div class="log" id="update-log"></div>
+            <div class="manual-box" id="manual-commands"></div>
+        </div>
+
+        <div class="card">
+            <h2>Terminal Workflow</h2>
+            <p>Use SSH and run updates manually. This keeps deploys pinned and auditable.</p>
+            <div class="log visible" style="max-height:none;">
+# 1) Create/update local pinned release from GitHub (choose commit SHA)
+cd /web/html/src/scripts
+./release_fetch_pinned.sh --sha 38d53d74d5c8
+
+# 2) Preview changes in this page (/admin/admin_Update.php)
+
+# 3) Apply manually (no --delete)
+# Copy the generated commands from "Preview Changes" output
+            </div>
+            <p style="margin-top:10px;">Weekly cache refresh (pinned to current <code>main</code> commit at run time):</p>
+            <div class="log visible" style="max-height:none;">
+# /etc/cron.weekly/update_release_cache
+#!/bin/bash
+set -euo pipefail
+SHA="$(git ls-remote https://github.com/ier1990/agent-hive.git refs/heads/main | awk '{print $1}')"
+/web/html/src/scripts/release_fetch_pinned.sh --sha "$SHA" >> /web/private/logs/release_cache.log 2>&1
+            </div>
         </div>
         
         <p style="margin-top: 40px; color: #666; font-size: 13px;">
@@ -671,66 +887,77 @@ $currentVersion = update_read_current_version();
             }
         }
         
-        async function runUpdate() {
-            const btn = document.getElementById('update-btn');
+        function selectedTargets() {
+            const checkboxes = document.querySelectorAll('input[name="targets[]"]:checked');
+            return Array.from(checkboxes).map(cb => cb.value);
+        }
+
+        function renderManualCommands(text) {
+            const box = document.getElementById('manual-commands');
+            if (!text) {
+                box.textContent = '';
+                box.classList.remove('visible');
+                return;
+            }
+            box.textContent = text;
+            box.classList.add('visible');
+        }
+
+        async function runPreview() {
+            const btn = document.getElementById('preview-btn');
             const log = document.getElementById('update-log');
             log.innerHTML = '';
             log.classList.add('visible');
-            
-            const checkboxes = document.querySelectorAll('input[name="targets[]"]:checked');
-            const targets = Array.from(checkboxes).map(cb => cb.value);
-            
+            renderManualCommands('');
+
+            const targets = selectedTargets();
             if (targets.length === 0) {
                 setStatus('update-status', 'error', 'Please select at least one target.');
                 return;
             }
-            
-            if (!confirm('This will update: ' + targets.join(', ') + '\\n\\nContinue?')) {
-                return;
-            }
-            
+
             btn.disabled = true;
-            setStatus('update-status', 'loading', 'Running update...');
-            logLine('Starting update for: ' + targets.join(', '));
-            
+            setStatus('update-status', 'loading', 'Building preview...');
+            logLine('Previewing selected targets: ' + targets.join(', '));
+
             try {
                 const formData = new FormData();
-                formData.append('action', 'update');
+                formData.append('action', 'preview');
                 targets.forEach(t => formData.append('targets[]', t));
-                
+
                 const resp = await fetch('', {
                     method: 'POST',
                     body: formData
                 });
                 const data = await resp.json();
-                
-                if (data.results) {
-                    for (const [key, result] of Object.entries(data.results)) {
-                        if (result.ok) {
-                            logLine('✓ ' + key + ': updated successfully', 'ok');
-                        } else {
-                            logLine('✗ ' + key + ': ' + (result.error || 'failed'), 'err');
-                        }
+
+                if (!data.ok) {
+                    setStatus('update-status', 'error', 'Preview failed: ' + (data.error || 'unknown'));
+                    logLine('Preview error: ' + (data.error || 'unknown'), 'err');
+                    return;
+                }
+
+                const preview = data.preview || {};
+                let totalChanged = 0;
+                for (const [key, result] of Object.entries(preview)) {
+                    if (result && result.ok) {
+                        const changed = Number(result.changed || 0);
+                        totalChanged += changed;
+                        logLine(`• ${key}: ${changed} files (new ${result.created || 0}, updated ${result.updated || 0})`, changed > 0 ? 'ok' : '');
+                    } else {
+                        logLine(`• ${key}: preview unavailable (${(result && result.error) || 'unknown'})`, 'err');
                     }
                 }
-                
-                if (data.ok) {
-                    setStatus('update-status', 'success', 'Update completed successfully!');
-                    logLine('Update finished. New version: ' + (data.version || 'updated'), 'ok');
-                    // Refresh version display
-                    document.getElementById('current-version').textContent = data.version || 'updated';
-                } else {
-                    setStatus('update-status', 'error', 'Update completed with errors: ' + (data.error || 'see log'));
-                    logLine('Update finished with errors.', 'err');
-                }
+                setStatus('update-status', 'info', `Preview complete: ${totalChanged} file changes.`);
+                if (data.manual_commands) renderManualCommands(data.manual_commands);
             } catch (e) {
-                setStatus('update-status', 'error', 'Update failed: ' + e.message);
+                setStatus('update-status', 'error', 'Preview failed: ' + e.message);
                 logLine('Error: ' + e.message, 'err');
             } finally {
                 btn.disabled = false;
             }
         }
-        
+
         // Auto-check on load
         checkForUpdates();
     </script>
