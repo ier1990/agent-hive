@@ -5,9 +5,9 @@ RewriteBase /v1/
 # Block dotfiles (e.g. .env) from being served under /v1
 RewriteRule (^|/)\.[^/]+ - [F,L]
 
-# Canonical API paths are slashless: /v1/ping/ -> /v1/ping
-# Keep this before endpoint rules and exclude root.
-RewriteRule ^(.+)/$ $1 [R=301,L]
+# Do not force slash removal globally.
+# Many /v1 endpoints are directory-backed; Apache DirectorySlash may canonicalize to trailing slash.
+# Route rules below accept both forms where needed.
 
 # Block direct .php (browser/client requests). Includes still work.
 RewriteCond %{THE_REQUEST} \s/+v1/.*\.php[\s?] [NC]

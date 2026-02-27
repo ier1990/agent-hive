@@ -45,8 +45,9 @@ When editing PHP, assume **PHP 7.3**:
 
 ## Routing guardrails (/v1)
 
-- Treat `/v1/*` as API routes with **slashless canonical paths**.
-- Keep `/v1/foo/` redirecting to `/v1/foo` (preserving query strings), not the other way around.
+- Treat `/v1/*` as API routes and avoid global slash-canonicalization rules that can fight Apache `DirectorySlash`.
+- For directory-backed endpoints, trailing-slash canonicalization (`/v1/foo` -> `/v1/foo/`) is acceptable.
+- Route rules should accept both forms (`/v1/foo` and `/v1/foo/`) when practical.
 - When adding routes, prefer explicit rewrites to current `*/index.php` layout (or explicit route files) over legacy flat `*.php` rewrites.
 - Do not reintroduce legacy `/v1/*.php` public route rewrites unless the file actually exists and is intentionally public.
 
