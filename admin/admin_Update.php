@@ -45,351 +45,7 @@ $UPDATABLE_TARGETS = [
     ],
 ];
 
-// ---- Helpers ----
-
-function update_version_file(): string {
-    return APP_ROOT . '/VERSION';
-}
-
-function update_read_current_version(): string {
-    $path = update_version_file();
-    if (!is_readable($path)) return 'unknown';
-    $v = @file_get_contents($path);
-    return is_string($v) ? trim($v) : 'unknown';
-}
-
-function update_write_version(string $version): bool {
-    $path = update_version_file();
-    return @file_put_contents($path, trim($version) . "\n", LOCK_EX) !== false;
-}
-
-function update_tmp_dir(): string {
-    $dir = PRIVATE_ROOT . '/tmp/update_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4));
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0700, true);
-    }
-    return $dir;
-}
-
-function update_log_path(): string {
-    return PRIVATE_ROOT . '/logs/admin_update.log';
-}
-
-function update_log(string $msg): void {
-    $dir = dirname(update_log_path());
-    if (!is_dir($dir)) @mkdir($dir, 0775, true);
-    $ts = date('Y-m-d H:i:s');
-    $ip = auth_client_ip();
-    @file_put_contents(update_log_path(), "[$ts] [$ip] $msg\n", FILE_APPEND | LOCK_EX);
-}
-
-/**
- * Fetch release info from internal /v1/releases/latest?app=...
- * Returns array with keys: ok, latest (array with version, filename, sha256, etc.)
- */
-function update_fetch_latest_info(): array {
-    $app = UPDATE_APP_NAME;
-    
-    // Internal fetch via file include or curl to localhost
-    // Prefer direct include to avoid network overhead
-    $latestPath = PRIVATE_ROOT . '/releases/' . $app . '/latest.json';
-    if (is_readable($latestPath)) {
-        $raw = @file_get_contents($latestPath);
-        if (is_string($raw) && $raw !== '') {
-            $data = json_decode($raw, true);
-            if (is_array($data)) {
-                return ['ok' => true, 'latest' => $data, 'source' => 'local'];
-            }
-        }
-    }
-    
-    // Fallback: HTTP request to self
-    $baseUrl = 'http://127.0.0.1';
-    $url = $baseUrl . '/v1/releases/latest?app=' . urlencode($app);
-    
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 10,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_HTTPHEADER => ['Accept: application/json'],
-    ]);
-    $resp = curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err = curl_error($ch);
-    curl_close($ch);
-    
-    if ($err || $code !== 200 || !is_string($resp)) {
-        return ['ok' => false, 'error' => $err ?: "HTTP $code", 'source' => 'http'];
-    }
-    
-    $data = json_decode($resp, true);
-    if (!is_array($data) || empty($data['ok'])) {
-        return ['ok' => false, 'error' => 'Invalid response', 'source' => 'http'];
-    }
-    
-    return ['ok' => true, 'latest' => $data['latest'] ?? [], 'source' => 'http'];
-}
-
-/**
- * Download the release tarball to a local path.
- */
-function update_download_tarball(string $filename, string $destPath): array {
-    $app = UPDATE_APP_NAME;
-    
-    // Try local file first
-    $localPath = PRIVATE_ROOT . '/releases/' . $app . '/' . $filename;
-    if (is_readable($localPath)) {
-        if (@copy($localPath, $destPath)) {
-            return ['ok' => true, 'source' => 'local', 'path' => $destPath];
-        }
-    }
-    
-    // Fallback: HTTP download
-    $baseUrl = 'http://127.0.0.1';
-    $url = $baseUrl . '/v1/releases/download?app=' . urlencode($app) . '&file=' . urlencode($filename);
-    
-    $fp = @fopen($destPath, 'wb');
-    if (!$fp) {
-        return ['ok' => false, 'error' => 'Cannot write to ' . $destPath];
-    }
-    
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => false,
-        CURLOPT_FILE => $fp,
-        CURLOPT_TIMEOUT => 300,
-        CURLOPT_FOLLOWLOCATION => true,
-    ]);
-    $ok = curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err = curl_error($ch);
-    curl_close($ch);
-    fclose($fp);
-    
-    if (!$ok || $code !== 200) {
-        @unlink($destPath);
-        return ['ok' => false, 'error' => $err ?: "HTTP $code"];
-    }
-    
-    return ['ok' => true, 'source' => 'http', 'path' => $destPath];
-}
-
-/**
- * Verify SHA256 checksum of downloaded file.
- */
-function update_verify_sha256(string $filePath, string $expected): bool {
-    if ($expected === '') return true; // No checksum to verify
-    $actual = @hash_file('sha256', $filePath);
-    return is_string($actual) && strcasecmp($actual, $expected) === 0;
-}
-
-/**
- * Extract tarball to a directory.
- */
-function update_extract_tarball(string $tarPath, string $destDir): array {
-    if (!is_dir($destDir)) {
-        @mkdir($destDir, 0700, true);
-    }
-    
-    // Use tar command (safer, handles .tar.gz)
-    $cmd = sprintf(
-        'tar -xzf %s -C %s 2>&1',
-        escapeshellarg($tarPath),
-        escapeshellarg($destDir)
-    );
-    
-    $output = [];
-    $ret = 0;
-    exec($cmd, $output, $ret);
-    
-    if ($ret !== 0) {
-        return ['ok' => false, 'error' => 'tar failed: ' . implode("\n", $output)];
-    }
-    
-    return ['ok' => true, 'dir' => $destDir];
-}
-
-/**
- * Sync a source directory to destination (rsync-like).
- * Preserves existing files not in source.
- */
-function update_sync_dir(string $srcDir, string $destDir): array {
-    if (!is_dir($srcDir)) {
-        return ['ok' => false, 'error' => "Source not found: $srcDir"];
-    }
-    
-    if (!is_dir($destDir)) {
-        @mkdir($destDir, 0755, true);
-    }
-    
-    // Use rsync if available, else fallback to cp -a
-    $rsync = trim(shell_exec('which rsync 2>/dev/null') ?: '');
-    
-    if ($rsync !== '') {
-        $cmd = sprintf(
-            'rsync -a --delete %s/ %s/ 2>&1',
-            escapeshellarg(rtrim($srcDir, '/')),
-            escapeshellarg(rtrim($destDir, '/'))
-        );
-    } else {
-        // Fallback: remove dest contents first, then copy
-        $cmd = sprintf(
-            'rm -rf %s/* 2>/dev/null; cp -a %s/* %s/ 2>&1',
-            escapeshellarg($destDir),
-            escapeshellarg($srcDir),
-            escapeshellarg($destDir)
-        );
-    }
-    
-    $output = [];
-    $ret = 0;
-    exec($cmd, $output, $ret);
-    
-    if ($ret !== 0) {
-        return ['ok' => false, 'error' => 'Sync failed: ' . implode("\n", $output)];
-    }
-    
-    return ['ok' => true];
-}
-
-/**
- * Cleanup temp directory.
- */
-function update_cleanup(string $dir): void {
-    if ($dir === '' || !is_dir($dir)) return;
-    // Safety: only delete under PRIVATE_ROOT/tmp
-    if (strpos($dir, PRIVATE_ROOT . '/tmp') !== 0) return;
-    exec('rm -rf ' . escapeshellarg($dir) . ' 2>/dev/null');
-}
-
-function update_target_is_writable(string $destDir): bool {
-    if (is_dir($destDir)) {
-        return is_writable($destDir);
-    }
-    $parent = dirname($destDir);
-    return is_dir($parent) && is_writable($parent);
-}
-
-function update_prepare_release_tree(array $latest): array {
-    $filename = (string)($latest['filename'] ?? '');
-    $sha256 = (string)($latest['sha256'] ?? '');
-    if ($filename === '') {
-        return ['ok' => false, 'error' => 'No filename in release info'];
-    }
-
-    $tmpDir = update_tmp_dir();
-    $tarPath = $tmpDir . '/' . $filename;
-
-    $dl = update_download_tarball($filename, $tarPath);
-    if (empty($dl['ok'])) {
-        update_cleanup($tmpDir);
-        return ['ok' => false, 'error' => (string)($dl['error'] ?? 'Download failed')];
-    }
-
-    if (!update_verify_sha256($tarPath, $sha256)) {
-        update_cleanup($tmpDir);
-        return ['ok' => false, 'error' => 'SHA256 checksum mismatch'];
-    }
-
-    $extractDir = $tmpDir . '/extract';
-    $ext = update_extract_tarball($tarPath, $extractDir);
-    if (empty($ext['ok'])) {
-        update_cleanup($tmpDir);
-        return ['ok' => false, 'error' => (string)($ext['error'] ?? 'Extract failed')];
-    }
-
-    $appRoot = $extractDir . '/' . UPDATE_APP_NAME;
-    if (!is_dir($appRoot)) {
-        $appRoot = $extractDir;
-    }
-    if (!is_dir($appRoot)) {
-        update_cleanup($tmpDir);
-        return ['ok' => false, 'error' => 'Extracted app root not found'];
-    }
-
-    return [
-        'ok' => true,
-        'tmp_dir' => $tmpDir,
-        'app_root' => $appRoot,
-        'tar_path' => $tarPath,
-        'filename' => $filename,
-    ];
-}
-
-function update_preview_target_changes(string $srcDir, string $destDir): array {
-    if (!is_dir($srcDir)) {
-        return ['ok' => false, 'error' => 'Source missing'];
-    }
-    if (!is_dir($destDir)) {
-        return ['ok' => true, 'changed' => 0, 'created' => 0, 'updated' => 0, 'missing_dest' => true, 'sample' => []];
-    }
-
-    $rsync = trim((string)shell_exec('which rsync 2>/dev/null'));
-    if ($rsync === '') {
-        return ['ok' => false, 'error' => 'rsync not found for preview'];
-    }
-
-    $cmd = sprintf(
-        "rsync -ain --no-perms --no-owner --no-group --out-format='%%i %%n' %s/ %s/ 2>/dev/null",
-        escapeshellarg(rtrim($srcDir, '/')),
-        escapeshellarg(rtrim($destDir, '/'))
-    );
-    $out = [];
-    $ret = 0;
-    exec($cmd, $out, $ret);
-    if ($ret !== 0) {
-        return ['ok' => false, 'error' => 'rsync preview failed'];
-    }
-
-    $created = 0;
-    $updated = 0;
-    $sample = [];
-    foreach ($out as $line) {
-        $line = trim((string)$line);
-        if ($line === '' || strpos($line, 'sending incremental file list') !== false) continue;
-        if (strpos($line, 'sent ') === 0 || strpos($line, 'total size is ') === 0) continue;
-
-        $parts = preg_split('/\s+/', $line, 2);
-        $sig = isset($parts[0]) ? (string)$parts[0] : '';
-        $name = isset($parts[1]) ? (string)$parts[1] : '';
-        if ($name === '' || substr($name, -1) === '/') continue;
-        if (strpos($sig, '>f') !== 0 && strpos($sig, 'c') !== 0) continue;
-
-        if (strpos($sig, '+++++++++') !== false) $created++;
-        else $updated++;
-
-        if (count($sample) < 20) $sample[] = $name;
-    }
-
-    return [
-        'ok' => true,
-        'changed' => $created + $updated,
-        'created' => $created,
-        'updated' => $updated,
-        'sample' => $sample,
-    ];
-}
-
-function update_manual_rsync_commands(string $filename, string $version, array $selected, array $targets): string {
-    $lines = [];
-    $lines[] = '# Manual upgrade (no --delete). Run as root/sudo on target server.';
-    $lines[] = 'REL="/web/private/releases/' . UPDATE_APP_NAME . '/' . $filename . '"';
-    $lines[] = 'TMP="/tmp/update_' . UPDATE_APP_NAME . '_$(date +%s)"';
-    $lines[] = 'sudo mkdir -p "$TMP"';
-    $lines[] = 'sudo tar -xzf "$REL" -C "$TMP"';
-    $lines[] = 'if [ -d "$TMP/' . UPDATE_APP_NAME . '" ]; then SRC="$TMP/' . UPDATE_APP_NAME . '"; else SRC="$TMP"; fi';
-    foreach ($selected as $key) {
-        if (!isset($targets[$key])) continue;
-        $cfg = $targets[$key];
-        $lines[] = 'sudo rsync -av "$SRC/' . $cfg['src'] . '/" "' . $cfg['dest'] . '/"';
-    }
-    if ($version !== '') {
-        $lines[] = 'echo "' . $version . '" | sudo tee /web/html/VERSION >/dev/null';
-    }
-    $lines[] = 'sudo rm -rf "$TMP"';
-    return implode("\n", $lines);
-}
+require_once __DIR__ . '/lib/update_helpers.php';
 
 // ---- Request handling ----
 
@@ -400,7 +56,23 @@ $action = $_POST['action'] ?? $_GET['action'] ?? '';
 if ($action === 'check') {
     header('Content-Type: application/json; charset=utf-8');
     $info = update_fetch_latest_info();
-    $info['current_version'] = update_read_current_version();
+    $currentVersion = update_read_current_version();
+    $latest = isset($info['latest']) && is_array($info['latest']) ? $info['latest'] : [];
+    $latestVersion = (string)($latest['version'] ?? '');
+    $latestCommit = strtolower((string)($latest['commit'] ?? ''));
+    $currentCommit = update_extract_commit_from_version($currentVersion);
+    $upToDate = false;
+    if ($latestCommit !== '' && $currentCommit !== '') {
+        $upToDate = (strpos($latestCommit, $currentCommit) === 0) || (strpos($currentCommit, $latestCommit) === 0);
+    } elseif ($latestVersion !== '' && $currentVersion !== '') {
+        $upToDate = ($latestVersion === $currentVersion);
+    }
+
+    $info['current_version'] = $currentVersion;
+    $info['current_commit'] = $currentCommit;
+    $info['latest_commit'] = $latestCommit;
+    $info['up_to_date'] = $upToDate;
+    $info['history'] = update_release_history(12);
     $writeMap = [];
     foreach ($UPDATABLE_TARGETS as $k => $cfg) {
         $writeMap[$k] = [
@@ -589,6 +261,14 @@ if ($method === 'POST' && $action === 'update') {
 // ---- Render HTML UI ----
 
 $currentVersion = update_read_current_version();
+$latestInfoForUi = update_fetch_latest_info();
+$latestVersionForUi = '';
+if (!empty($latestInfoForUi['ok']) && !empty($latestInfoForUi['latest']) && is_array($latestInfoForUi['latest'])) {
+    $latestVersionForUi = (string)($latestInfoForUi['latest']['version'] ?? '');
+}
+if ($latestVersionForUi === '') {
+    $latestVersionForUi = 'unknown';
+}
 
 ?>
 <!DOCTYPE html>
@@ -754,6 +434,18 @@ $currentVersion = update_read_current_version();
         .log .line { margin: 2px 0; }
         .log .line.ok { color: #4ade80; }
         .log .line.err { color: #fca5a5; }
+        .history-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+        .history-list li {
+            border-bottom: 1px solid #0f3460;
+            padding: 8px 0;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .history-list li:last-child { border-bottom: none; }
         .manual-box {
             background: #0d1117;
             border: 1px solid #30363d;
@@ -789,6 +481,13 @@ $currentVersion = update_read_current_version();
                 <button class="btn btn-secondary" onclick="checkForUpdates()">Check for Updates</button>
             </div>
             <div class="status" id="check-status"></div>
+        </div>
+
+        <div class="card">
+            <h2>Release Cache History</h2>
+            <ul class="history-list" id="release-history">
+                <li>Run "Check for Updates" to load release cache history.</li>
+            </ul>
         </div>
         
         <div class="card">
@@ -828,6 +527,8 @@ cd /web/html/src/scripts
 # 3) Apply manually (no --delete)
 # Copy the generated commands from "Preview Changes" output
             </div>
+            <p style="margin-top:10px;">If you manually apply a release, update installed VERSION to match:</p>
+            <div class="log visible" style="max-height:none;" id="set-version-cmd">echo "<?= htmlspecialchars($latestVersionForUi, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" | sudo tee /web/html/VERSION >/dev/null</div>
             <p style="margin-top:10px;">Weekly cache refresh (pinned to current <code>main</code> commit at run time):</p>
             <div class="log visible" style="max-height:none;">
 # /etc/cron.weekly/update_release_cache
@@ -871,10 +572,32 @@ SHA="$(git ls-remote https://github.com/ier1990/agent-hive.git refs/heads/main |
                     document.getElementById('latest-version').textContent = ver;
                     document.getElementById('latest-version').classList.remove('unknown');
                     
-                    if (data.current_version === ver) {
-                        setStatus('check-status', 'success', 'You are running the latest version.');
+                    if (data.up_to_date) {
+                        setStatus('check-status', 'success', 'Installed version matches latest cached release.');
                     } else {
-                        setStatus('check-status', 'info', 'A new version is available!');
+                        const cv = data.current_version || 'unknown';
+                        setStatus('check-status', 'info', 'A newer cached release is available. Installed: ' + cv + ' | Latest: ' + ver);
+                    }
+                    const setVersionCmd = document.getElementById('set-version-cmd');
+                    if (setVersionCmd) {
+                        setVersionCmd.textContent = `echo "${ver}" | sudo tee /web/html/VERSION >/dev/null`;
+                    }
+
+                    const hist = document.getElementById('release-history');
+                    hist.innerHTML = '';
+                    const rows = Array.isArray(data.history) ? data.history : [];
+                    if (rows.length === 0) {
+                        const li = document.createElement('li');
+                        li.textContent = 'No releases found in /web/private/releases/html';
+                        hist.appendChild(li);
+                    } else {
+                        for (const row of rows) {
+                            const li = document.createElement('li');
+                            const dt = row.mtime ? new Date(row.mtime * 1000).toISOString() : '';
+                            const bytes = row.bytes || 0;
+                            li.textContent = `${row.version || row.filename}  (${bytes} bytes)  ${dt}`;
+                            hist.appendChild(li);
+                        }
                     }
                 } else {
                     const err = data.error || 'No release found';
