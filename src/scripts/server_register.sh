@@ -14,17 +14,98 @@
 #   HEARTBEAT_INTERVAL   - Seconds between heartbeats (default: 60)
 #   SERVER_ID_FILE       - Path to persist server_id (default: /web/private/server_id)
 #   SERVER_LOCATION      - 'lan' or 'cloud' (default: lan)
+#   CLUSTER_CONFIG_FILE  - JSON config path (default: /web/private/config/cluster_receiver.json)
+#                          Schema:
+#                            {"receiver_url":"http://192.168.0.142","api_key":"...","server_location":"lan","heartbeat_interval":60}
 
 set -euo pipefail
 
 AGENTHIVE_URL="${AGENTHIVE_URL:-}"
 AGENTHIVE_API_KEY="${AGENTHIVE_API_KEY:-}"
-HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}"
+HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-}"
 SERVER_ID_FILE="${SERVER_ID_FILE:-/web/private/server_id}"
+SERVER_LOCATION="${SERVER_LOCATION:-}"
+CLUSTER_CONFIG_FILE="${CLUSTER_CONFIG_FILE:-/web/private/config/cluster_receiver.json}"
+
+load_cluster_defaults() {
+    local cfg="$1"
+    if [ ! -f "$cfg" ]; then
+        return 0
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "WARN: python3 not found; skipping cluster config file $cfg" >&2
+        return 0
+    fi
+
+    local cfg_url cfg_key cfg_loc cfg_int
+    cfg_url="$(python3 - "$cfg" <<'PY'
+import json,sys
+try:
+    d = json.load(open(sys.argv[1], 'r', encoding='utf-8'))
+    print((d.get('receiver_url') or '').strip())
+except Exception:
+    print('')
+PY
+)"
+    cfg_key="$(python3 - "$cfg" <<'PY'
+import json,sys
+try:
+    d = json.load(open(sys.argv[1], 'r', encoding='utf-8'))
+    print((d.get('api_key') or '').strip())
+except Exception:
+    print('')
+PY
+)"
+    cfg_loc="$(python3 - "$cfg" <<'PY'
+import json,sys
+try:
+    d = json.load(open(sys.argv[1], 'r', encoding='utf-8'))
+    print((d.get('server_location') or '').strip())
+except Exception:
+    print('')
+PY
+)"
+    cfg_int="$(python3 - "$cfg" <<'PY'
+import json,sys
+try:
+    d = json.load(open(sys.argv[1], 'r', encoding='utf-8'))
+    v = d.get('heartbeat_interval')
+    if isinstance(v, int):
+        print(v)
+    else:
+        print('')
+except Exception:
+    print('')
+PY
+)"
+
+    if [ -z "$AGENTHIVE_URL" ] && [ -n "$cfg_url" ]; then
+        AGENTHIVE_URL="$cfg_url"
+    fi
+    if [ -z "$AGENTHIVE_API_KEY" ] && [ -n "$cfg_key" ]; then
+        AGENTHIVE_API_KEY="$cfg_key"
+    fi
+    if [ -z "$SERVER_LOCATION" ] && [ -n "$cfg_loc" ]; then
+        SERVER_LOCATION="$cfg_loc"
+    fi
+    if [ -z "$HEARTBEAT_INTERVAL" ] && [ -n "$cfg_int" ]; then
+        HEARTBEAT_INTERVAL="$cfg_int"
+    fi
+}
+
+load_cluster_defaults "$CLUSTER_CONFIG_FILE"
+
+HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}"
 SERVER_LOCATION="${SERVER_LOCATION:-lan}"
 
+if ! [[ "$HEARTBEAT_INTERVAL" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: HEARTBEAT_INTERVAL must be an integer." >&2
+    exit 1
+fi
+
 if [ -z "$AGENTHIVE_URL" ] || [ -z "$AGENTHIVE_API_KEY" ]; then
-    echo "ERROR: AGENTHIVE_URL and AGENTHIVE_API_KEY must be set." >&2
+    echo "ERROR: AGENTHIVE_URL and AGENTHIVE_API_KEY must be set (env or $CLUSTER_CONFIG_FILE)." >&2
     exit 1
 fi
 

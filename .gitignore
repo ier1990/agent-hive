@@ -39,6 +39,7 @@ music/
 
 # --- Local admin overlay (never commit) ---
 /.admin/
+admin/AI_Media/
 
 # --- Releases (generated artifacts) ---
 v1/releases/*

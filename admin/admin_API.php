@@ -68,7 +68,26 @@ function generate_api_key() {
 }
 
 // Scopes actively used across v1 endpoints
-$KNOWN_SCOPES = ['chat', 'tools', 'health', 'search', 'inbox', 'push', 'receiving', 'incoming', 'responses'];
+$KNOWN_SCOPES = [
+  'chat',
+  'tools',
+  'health',
+  'search',
+  'inbox',
+  'push',
+  'receiving',
+  'incoming',
+  'responses',
+  'server',
+  'servers',
+  'models',
+  'story',
+  'agent',
+  'answer',
+  'auth',
+  'ping',
+  'releases'
+];
 
 // ══════════════════════════════════════════════════════
 //  v1 & AI config
