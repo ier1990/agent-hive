@@ -15,7 +15,9 @@ require_once dirname(__DIR__, 2) . '/lib/bootstrap.php';
 require_once dirname(__DIR__, 2) . '/lib/schema_builder.php';
 require_once dirname(__DIR__, 2) . '/lib/registry_logger.php';
 
-api_guard_once('search', true);
+// Search endpoint should not require tools scope.
+// API keys with "search" scope (or general allowed scopes in lan mode) should pass.
+api_guard_once('search', false);
 
 // --- search ---
 
