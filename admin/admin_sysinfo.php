@@ -12,7 +12,6 @@
 
 // Determine base URL for API
 $url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]";
-$API_BASE = $url . '/v1/';
 
 // Use the logical DB name used by senders (inbox.php resolves this)
 // DB path: /web/private/db/inbox/sysinfo_new.db
@@ -20,34 +19,113 @@ $DB_NAME = 'sysinfo_new';
 // Table name used by the sysinfo sender script (from SERVICE)
 $TABLE_NAME = 'daily_sysinfo';
 
-// Load .env /web/private/.env
 $dotenvPath = '/web/private/.env';
-if (file_exists($dotenvPath)) {
-    $lines = file($dotenvPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+function load_dotenv_values($path) {
+    $values = [];
+    if (!is_file($path) || !is_readable($path)) return $values;
+    $lines = file($path, FILE_IGNORE_NEW_LINES);
+    if (!is_array($lines)) return $values;
     foreach ($lines as $line) {
-        if (strpos(trim($line), '#') === 0) continue; // skip comments
-        list($key, $value) = explode('=', $line, 2);
-        $_ENV[trim($key)] = trim($value);
+        $line = (string)$line;
+        if ($line === '' || strpos(ltrim($line), '#') === 0) continue;
+        $pos = strpos($line, '=');
+        if ($pos === false) continue;
+        $key = trim(substr($line, 0, $pos));
+        $val = trim(substr($line, $pos + 1));
+        if ($key !== '') $values[$key] = $val;
+    }
+    return $values;
+}
+
+function save_dotenv_values($path, array $updates) {
+    $lines = [];
+    if (is_file($path) && is_readable($path)) {
+        $tmp = file($path, FILE_IGNORE_NEW_LINES);
+        if (is_array($tmp)) $lines = $tmp;
+    }
+
+    $seen = [];
+    foreach ($lines as $idx => $line) {
+        $line = (string)$line;
+        if ($line === '' || strpos(ltrim($line), '#') === 0) continue;
+        $pos = strpos($line, '=');
+        if ($pos === false) continue;
+        $key = trim(substr($line, 0, $pos));
+        if ($key !== '' && array_key_exists($key, $updates)) {
+            $lines[$idx] = $key . '=' . (string)$updates[$key];
+            $seen[$key] = true;
+        }
+    }
+
+    foreach ($updates as $key => $val) {
+        if (!isset($seen[$key])) {
+            $lines[] = $key . '=' . (string)$val;
+        }
+    }
+
+    $out = implode("\n", $lines);
+    if ($out === '' || substr($out, -1) !== "\n") $out .= "\n";
+    return @file_put_contents($path, $out, LOCK_EX) !== false;
+}
+
+function normalize_inbox_url($raw, $fallbackBaseUrl) {
+    $raw = trim((string)$raw);
+    if ($raw === '') return rtrim((string)$fallbackBaseUrl, '/') . '/v1/inbox/';
+    $parts = explode('?', $raw, 2);
+    $base = rtrim((string)$parts[0], '/');
+    if (substr($base, -9) === '/v1/inbox') return $base . '/';
+    if (substr($base, -8) === '/v1/inbox') return $base . '/';
+    if (substr($base, -3) === '/v1') return $base . '/inbox/';
+    if (preg_match('#^https?://#i', $base)) return $base . '/';
+    return rtrim((string)$fallbackBaseUrl, '/') . '/v1/inbox/';
+}
+
+function mask_secret($v) {
+    $v = trim((string)$v);
+    $len = strlen($v);
+    if ($len <= 8) return str_repeat('*', $len);
+    return substr($v, 0, 4) . str_repeat('*', $len - 8) . substr($v, -4);
+}
+
+$envVals = load_dotenv_values($dotenvPath);
+foreach ($envVals as $k => $v) {
+    $_ENV[$k] = $v;
+}
+
+$configSaved = '';
+$configError = '';
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['save_sysinfo_config'])) {
+    $newApiUrl = normalize_inbox_url((string)($_POST['sysinfo_api_url'] ?? ''), $url);
+    $newApiKey = trim((string)($_POST['sysinfo_api_key'] ?? ''));
+
+    $updates = ['SYSINFO_API_URL' => $newApiUrl];
+    if ($newApiKey !== '') {
+        $updates['SYSINFO_API_KEY'] = $newApiKey;
+    }
+
+    if (save_dotenv_values($dotenvPath, $updates)) {
+        foreach ($updates as $k => $v) {
+            $_ENV[$k] = $v;
+        }
+        $configSaved = 'Sysinfo sender config saved.';
+    } else {
+        $configError = 'Failed to write /web/private/.env. Check file permissions.';
     }
 }
 
-$API_KEY = $_ENV['IER_API_KEY'] ?? '';
-
-if (empty($API_KEY)) {
-    http_response_code(500);
-    echo "Server misconfiguration: API key not set.";
-    exit;
-}
+$INBOX_API_URL = normalize_inbox_url((string)($_ENV['SYSINFO_API_URL'] ?? ''), $url);
+$API_KEY = (string)($_ENV['SYSINFO_API_KEY'] ?? ($_ENV['IER_API_KEY'] ?? ''));
 
 // Helper function to make API requests
-function apiRequest($endpoint, $params = []) {
-    global $API_BASE, $API_KEY;
-    
-    $url = $API_BASE . $endpoint;
+function apiRequest($params = []) {
+    global $INBOX_API_URL, $API_KEY;
+
+    $url = $INBOX_API_URL;
     if (!empty($params)) {
         $url .= '?' . http_build_query($params);
     }
-    
+
     $headers = ['Content-Type: application/json'];
     if (!empty($API_KEY)) {
         $headers[] = 'X-API-Key: ' . $API_KEY;
@@ -97,8 +175,8 @@ if (!empty($host_filter)) {
     $params['f_host'] = $host_filter;
 }
 
-// Fetch rows from existing API (/v1/inbox)
-$resp = apiRequest('/inbox', $params);
+// Fetch rows from configured inbox API
+$resp = apiRequest($params);
 $rows = is_array($resp) ? ($resp['rows'] ?? null) : null;
 if (!is_array($rows)) { $rows = []; }
 
@@ -236,6 +314,32 @@ function parseDisk($disk_string) {
     <div class="container mx-auto px-4" x-data="dashboard()">
         <!-- Filters -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+            <h2 class="text-xl font-semibold mb-3">Sysinfo Sender Config</h2>
+            <?php if ($configSaved !== ''): ?>
+                <div class="mb-3 text-green-700 bg-green-100 border border-green-300 rounded px-3 py-2"><?= htmlspecialchars($configSaved) ?></div>
+            <?php endif; ?>
+            <?php if ($configError !== ''): ?>
+                <div class="mb-3 text-red-700 bg-red-100 border border-red-300 rounded px-3 py-2"><?= htmlspecialchars($configError) ?></div>
+            <?php endif; ?>
+            <form method="post" class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-3">
+                <input type="hidden" name="save_sysinfo_config" value="1">
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Inbox API URL (local or external)</label>
+                    <input type="text" name="sysinfo_api_url" value="<?= htmlspecialchars($INBOX_API_URL) ?>" class="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="http://127.0.0.1/v1/inbox/">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">API Key (optional for save)</label>
+                    <input type="text" name="sysinfo_api_key" value="" class="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="Leave blank to keep current">
+                    <div class="text-xs text-gray-500 mt-1">Current: <?= htmlspecialchars($API_KEY !== '' ? mask_secret($API_KEY) : '(none)') ?></div>
+                </div>
+                <div class="md:col-span-3">
+                    <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-md transition duration-200">Save Sysinfo Config</button>
+                </div>
+            </form>
+            <div class="text-xs text-gray-500">Saved to /web/private/.env as SYSINFO_API_URL and SYSINFO_API_KEY. Sender script reads these when cron runs.</div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-md p-6 mb-8">
             <h2 class="text-xl font-semibold mb-4">Filters & Controls</h2>
             <form method="GET" class="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
@@ -285,7 +389,7 @@ function parseDisk($disk_string) {
                 <div class="bg-white border border-yellow-300 rounded-md p-4 mt-4 text-sm">
                     <h4 class="font-semibold text-gray-800 mb-2">🔍 Debug Information:</h4>
                     <div class="space-y-2 font-mono text-xs">
-                        <div><strong>API Base URL:</strong> <?= htmlspecialchars($API_BASE) ?></div>
+                        <div><strong>Inbox API URL:</strong> <?= htmlspecialchars($INBOX_API_URL) ?></div>
                         <div><strong>Database:</strong> <?= htmlspecialchars($DB_NAME) ?></div>
                         <div><strong>Table:</strong> <?= htmlspecialchars($TABLE_NAME) ?></div>
                         <div><strong>API Key Set:</strong> <?= !empty($API_KEY) ? '✓ Yes' : '✗ No' ?></div>
@@ -300,7 +404,7 @@ function parseDisk($disk_string) {
                         <div class="border-t pt-2 mt-2">
                             <strong>Full API URL:</strong>
                             <?php 
-                            $debug_url = $API_BASE . 'inbox?' . http_build_query($params);
+                            $debug_url = $INBOX_API_URL . '?' . http_build_query($params);
                             ?>
                             <div class="bg-gray-100 p-2 rounded mt-1 break-all"><?= htmlspecialchars($debug_url) ?></div>
                         </div>

@@ -1,14 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API="${API:-http://127.0.0.1/v1/inbox}"
+API="${API:-${SYSINFO_API_URL:-http://127.0.0.1/v1/inbox/}}"
 DB="${DB:-sysinfo_new}"
 SERVICE="${SERVICE:-daily_sysinfo}"
 
+# Load optional defaults from /web/private/.env when not explicitly set
+if [[ -f /web/private/.env ]]; then
+  while IFS='=' read -r k v; do
+    [[ -z "${k:-}" ]] && continue
+    [[ "$k" =~ ^[[:space:]]*# ]] && continue
+    k="${k## }"
+    k="${k%% }"
+    v="${v:-}"
+    case "$k" in
+      SYSINFO_API_URL)
+        if [[ -z "${API:-}" || "${API:-}" == "http://127.0.0.1/v1/inbox/" ]]; then
+          [[ -n "$v" ]] && API="$v"
+        fi
+        ;;
+      SYSINFO_API_KEY)
+        if [[ -z "${IER_API_KEY:-}" && -n "$v" ]]; then
+          IER_API_KEY="$v"
+        fi
+        ;;
+      IER_API_KEY)
+        if [[ -z "${IER_API_KEY:-}" && -n "$v" ]]; then
+          IER_API_KEY="$v"
+        fi
+        ;;
+    esac
+  done < /web/private/.env
+fi
+
+# Canonicalize inbox URL to trailing slash form for this host's routing behavior
+if [[ "${API}" =~ /v1/inbox$ ]]; then
+  API="${API}/"
+fi
 
 # Optional auth (recommended): export IER_API_KEY="xxxx"
 API_KEY_HEADER=()
 [[ -n "${IER_API_KEY:-}" ]] && API_KEY_HEADER=( -H "X-API-Key: $IER_API_KEY" )
+if [[ -z "${IER_API_KEY:-}" ]]; then
+  echo "WARN: IER_API_KEY not set; guest inbox mode may reject table '${SERVICE}' (403)." >&2
+fi
 
 # Optional: auto-install a static jq if missing (set ALLOW_AUTO_INSTALL_JQ=1)
 maybe_install_jq() {
