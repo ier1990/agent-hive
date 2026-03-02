@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os, sys, time, json, sqlite3, datetime, fcntl, urllib.parse, logging
 import urllib.request
+import urllib.error
 from logging.handlers import RotatingFileHandler
 
 
@@ -20,6 +21,24 @@ BATCH = int(os.getenv("BASH_SEARCH_BATCH", "5"))
 SLEEP_SEC = float(os.getenv("BASH_SEARCH_SLEEP", "1"))
 
 
+def normalize_search_api_base(raw: str) -> str:
+    s = (raw or "").strip()
+    if not s:
+        return "http://192.168.0.142/v1/search/"
+    # Legacy forms may include ?q= suffix; keep base endpoint only.
+    if "/v1/search" in s:
+        s = s.split("?", 1)[0]
+    s = s.rstrip("/")
+    if s.endswith("/v1/search"):
+        return s + "/"
+    return s + "/"
+
+
+def build_search_url(base: str, q: str) -> str:
+    b = normalize_search_api_base(base)
+    return b + "?q=" + urllib.parse.quote(q or "", safe="")
+
+
 def _load_api_key_from_file(path: str) -> str:
     if not path:
         return ""
@@ -34,7 +53,12 @@ def _load_api_key_from_file(path: str) -> str:
             if meta.get("active") is False:
                 continue
             scopes = meta.get("scopes")
-            if isinstance(scopes, list) and "tools" in scopes:
+            if not isinstance(scopes, list):
+                continue
+            # /v1/search should use search scope (tools accepted as fallback).
+            if "search" in scopes:
+                return str(k)
+            if "tools" in scopes:
                 return str(k)
     except Exception:
         return ""
@@ -230,18 +254,33 @@ def mark(db: sqlite3.Connection, cmd_id: int, status: str, err: str = None):
     db.commit()
 
 def call_search(q: str) -> dict:
-    url = SEARCH_API + urllib.parse.quote(q, safe="")
+    url = build_search_url(SEARCH_API, q)
     headers = {"Accept": "application/json"}
     if SEARCH_API_KEY:
         headers["X-API-Key"] = SEARCH_API_KEY
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = resp.read().decode("utf-8", errors="ignore")
-        return json.loads(body)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            return json.loads(body)
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
+        raise RuntimeError(
+            "search_http_error status=%s url=%s body=%s" % (
+                int(getattr(e, "code", 0) or 0),
+                url,
+                _truncate(body, 400),
+            )
+        )
+    except urllib.error.URLError as e:
+        raise RuntimeError("search_url_error url=%s reason=%s" % (url, _truncate(str(e.reason), 300)))
 
 
 def probe_search_api(logger: logging.Logger) -> None:
-    url = SEARCH_API + urllib.parse.quote("ping", safe="")
+    url = build_search_url(SEARCH_API, "ping")
     headers = {"Accept": "application/json"}
     if SEARCH_API_KEY:
         headers["X-API-Key"] = SEARCH_API_KEY
@@ -276,7 +315,7 @@ def main():
     logger.info(
         "start db=%s api=%s batch=%s sleep=%s",
         KB_DB,
-        SEARCH_API,
+        normalize_search_api_base(SEARCH_API),
         int(BATCH),
         float(SLEEP_SEC),
     )

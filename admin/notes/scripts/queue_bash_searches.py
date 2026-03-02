@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os, sys, time, json, sqlite3, datetime, fcntl, urllib.parse, logging
 import urllib.request
+import urllib.error
 from logging.handlers import RotatingFileHandler
 
 from notes_config import get_config, get_private_root
@@ -17,6 +18,21 @@ _CFG = get_config()
 SEARCH_API = _CFG.get("search.api.base", "http://192.168.0.142/v1/search/?q=")
 BATCH = int(os.getenv("BASH_SEARCH_BATCH", "5"))
 SLEEP_SEC = float(os.getenv("BASH_SEARCH_SLEEP", "1"))
+
+def normalize_search_api_base(raw: str) -> str:
+    s = (raw or "").strip()
+    if not s:
+        return "http://192.168.0.142/v1/search/"
+    if "/v1/search" in s:
+        s = s.split("?", 1)[0]
+    s = s.rstrip("/")
+    if s.endswith("/v1/search"):
+        return s + "/"
+    return s + "/"
+
+def build_search_url(base: str, q: str) -> str:
+    b = normalize_search_api_base(base)
+    return b + "?q=" + urllib.parse.quote(q or "", safe="")
 
 def now():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -192,11 +208,26 @@ def mark(db: sqlite3.Connection, cmd_id: int, status: str, err: str = None):
     db.commit()
 
 def call_search(q: str) -> dict:
-    url = SEARCH_API + urllib.parse.quote(q, safe="")
+    url = build_search_url(SEARCH_API, q)
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = resp.read().decode("utf-8", errors="ignore")
-        return json.loads(body)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            return json.loads(body)
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
+        raise RuntimeError(
+            "search_http_error status=%s url=%s body=%s" % (
+                int(getattr(e, "code", 0) or 0),
+                url,
+                _truncate(body, 400),
+            )
+        )
+    except urllib.error.URLError as e:
+        raise RuntimeError("search_url_error url=%s reason=%s" % (url, _truncate(str(e.reason), 300)))
 
 def main():
     logger = setup_logging()
