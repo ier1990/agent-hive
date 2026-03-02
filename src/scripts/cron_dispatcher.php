@@ -10,15 +10,64 @@ require_once __DIR__ . '/../../lib/bootstrap.php';
 require_once APP_LIB . '/cron.php';
 require_once APP_LIB . '/cron_dispatcher.php';
 
+function cron_dispatcher_pid_running($pid)
+{
+	$pid = (int)$pid;
+	if ($pid <= 0) return false;
+	if (function_exists('posix_kill')) {
+		return @posix_kill($pid, 0);
+	}
+	$procPath = '/proc/' . $pid;
+	return is_dir($procPath);
+}
+
+function cron_dispatcher_lock_meta_read($lockPath)
+{
+	if (!is_file($lockPath) || !is_readable($lockPath)) return [];
+	$raw = @file_get_contents($lockPath);
+	if (!is_string($raw) || trim($raw) === '') return [];
+	$tmp = json_decode($raw, true);
+	return is_array($tmp) ? $tmp : [];
+}
+
+function cron_dispatcher_lock_meta_write($lockFp, array $meta)
+{
+	if (!is_resource($lockFp)) return;
+	$json = json_encode($meta, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+	if (!is_string($json)) return;
+	@ftruncate($lockFp, 0);
+	@rewind($lockFp);
+	@fwrite($lockFp, $json . "\n");
+	@fflush($lockFp);
+}
+
 // Run-as filter for task selection.
 // Convention: scripts named root_* run only under --run-as=root.
 // All other scripts run under --run-as=samekhi.
 $runAs = 'root'; // default safe
+$stuckKillEnabled = false; // explicit opt-in via --stuck-kill=1
+$stuckKillAfterSeconds = 900; // 15 minutes default threshold
+$stuckKillSignal = 'TERM'; // TERM or KILL
 if (PHP_SAPI === 'cli' && isset($argv) && is_array($argv)) {
 	foreach ($argv as $a) {
 		if (is_string($a) && strpos($a, '--run-as=') === 0) {
 			$runAs = substr($a, strlen('--run-as='));
-			break;
+			continue;
+		}
+		if (is_string($a) && strpos($a, '--stuck-kill=') === 0) {
+			$v = strtolower(trim((string)substr($a, strlen('--stuck-kill='))));
+			$stuckKillEnabled = in_array($v, ['1', 'true', 'yes', 'on'], true);
+			continue;
+		}
+		if (is_string($a) && strpos($a, '--stuck-kill-after=') === 0) {
+			$v = (int)substr($a, strlen('--stuck-kill-after='));
+			if ($v >= 0) $stuckKillAfterSeconds = $v;
+			continue;
+		}
+		if (is_string($a) && strpos($a, '--stuck-kill-signal=') === 0) {
+			$v = strtoupper(trim((string)substr($a, strlen('--stuck-kill-signal='))));
+			if (in_array($v, ['TERM', 'KILL'], true)) $stuckKillSignal = $v;
+			continue;
 		}
 	}
 }
@@ -29,6 +78,9 @@ $locksDir = rtrim($privateRoot, "/\\") . '/locks';
 if (!is_dir($locksDir)) {
 	@mkdir($locksDir, 0775, true);
 }
+$dispatcherPid = (int)getmypid();
+$dispatcherHost = php_uname('n');
+$lockWarnAfterSeconds = 600;
 
 $lockPath = $locksDir . '/cron_dispatcher_' . $runAs . '.lock';
 $lockFp = @fopen($lockPath, 'c+');
@@ -37,10 +89,62 @@ if (!$lockFp) {
 	exit(1);
 }
 
+// Read any previous metadata for diagnostics before trying lock.
+$existingLockMeta = cron_dispatcher_lock_meta_read($lockPath);
 if (!flock($lockFp, LOCK_EX | LOCK_NB)) {
-	// Another dispatcher instance is running.
+	$holderPid = isset($existingLockMeta['pid']) ? (int)$existingLockMeta['pid'] : 0;
+	$holderRunAs = isset($existingLockMeta['run_as']) ? (string)$existingLockMeta['run_as'] : '';
+	$holderStarted = isset($existingLockMeta['started_at']) ? (string)$existingLockMeta['started_at'] : '';
+	$holderAlive = $holderPid > 0 ? cron_dispatcher_pid_running($holderPid) : false;
+	$ageSec = -1;
+	if ($holderStarted !== '') {
+		$ts = strtotime($holderStarted);
+		if ($ts !== false) $ageSec = max(0, time() - (int)$ts);
+	}
+	$msg = 'LOCK_BUSY run_as=' . $runAs
+		. ' lock=' . $lockPath
+		. ' holder_pid=' . $holderPid
+		. ' holder_run_as=' . ($holderRunAs !== '' ? $holderRunAs : 'unknown')
+		. ' holder_started=' . ($holderStarted !== '' ? $holderStarted : 'unknown')
+		. ' holder_alive=' . ($holderAlive ? 'yes' : 'no')
+		. ' age_sec=' . $ageSec
+		. ' self_pid=' . $dispatcherPid;
+	if ($ageSec >= $lockWarnAfterSeconds) {
+		$msg .= ' warn=possible_stuck_dispatcher';
+	}
+	cron_dispatcher_log_line($msg);
+
+	// Optional self-healing: terminate stale lock holder.
+	$canTryKill = $stuckKillEnabled
+		&& $stuckKillAfterSeconds > 0
+		&& $ageSec >= $stuckKillAfterSeconds
+		&& $holderPid > 0
+		&& $holderAlive
+		&& (empty($existingLockMeta['run_as']) || (string)$existingLockMeta['run_as'] === $runAs);
+	if ($canTryKill) {
+		if (!function_exists('posix_kill')) {
+			cron_dispatcher_log_line('LOCK_KILL_SKIP run_as=' . $runAs . ' pid=' . $holderPid . ' reason=posix_kill_unavailable');
+		} else {
+			$sigNo = ($stuckKillSignal === 'KILL') ? 9 : 15;
+			$ok = @posix_kill($holderPid, $sigNo);
+			cron_dispatcher_log_line('LOCK_KILL_ATTEMPT run_as=' . $runAs . ' pid=' . $holderPid . ' signal=' . $stuckKillSignal . ' ok=' . ($ok ? 'yes' : 'no'));
+			if ($ok) {
+				usleep(300000);
+				$aliveAfter = cron_dispatcher_pid_running($holderPid);
+				cron_dispatcher_log_line('LOCK_KILL_RESULT run_as=' . $runAs . ' pid=' . $holderPid . ' alive_after=' . ($aliveAfter ? 'yes' : 'no'));
+			}
+		}
+	}
 	exit(0);
 }
+
+cron_dispatcher_lock_meta_write($lockFp, [
+	'pid' => $dispatcherPid,
+	'run_as' => $runAs,
+	'host' => $dispatcherHost,
+	'script' => __FILE__,
+	'started_at' => gmdate('c'),
+]);
 
 $startedAt = microtime(true);
 $nowTs = time();
@@ -70,6 +174,14 @@ $tasks = array_values(array_filter($tasks, function ($t) use ($runAs) {
 	if ($runAs === 'root') return $isRoot;
 	return !$isRoot; // samekhi runs non-root_
 }));
+cron_dispatcher_log_line(
+	'START: run_as=' . $runAs
+	. ' pid=' . $dispatcherPid
+	. ' tasks=' . count($tasks)
+	. ' stuck_kill=' . ($stuckKillEnabled ? 'on' : 'off')
+	. ' stuck_kill_after=' . $stuckKillAfterSeconds
+	. ' stuck_kill_signal=' . $stuckKillSignal
+);
 
 $ran = 0;
 $skipped = 0;
@@ -187,7 +299,8 @@ foreach ($tasks as $task) {
 }
 
 $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
-cron_dispatcher_log_line('DONE: ran=' . $ran . ' skipped=' . $skipped . ' errors=' . $errors . ' ms=' . $elapsedMs);
+$peakMemMb = round(memory_get_peak_usage(true) / (1024 * 1024), 2);
+cron_dispatcher_log_line('DONE: run_as=' . $runAs . ' pid=' . $dispatcherPid . ' ran=' . $ran . ' skipped=' . $skipped . ' errors=' . $errors . ' ms=' . $elapsedMs . ' peak_mem_mb=' . $peakMemMb);
 
 // Keep lock held until end of process
 @flock($lockFp, LOCK_UN);

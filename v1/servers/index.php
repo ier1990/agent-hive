@@ -82,6 +82,7 @@ $schema = [
 ];
 
 ensureTableAndColumns($pdo, 'servers', $schema);
+ensure_heartbeat_samples_schema($pdo);
 
 // --- Routing ---
 try {
@@ -216,6 +217,13 @@ function handle_register(PDO $pdo, string $reqId, float $start) {
         ]);
     }
 
+    // Best-effort audit trail for history charts.
+    try {
+        record_heartbeat_sample($pdo, $serverId, 'register');
+    } catch (Throwable $e) {
+        // Keep register path resilient even if history insert fails.
+    }
+
     $elapsed = (int)round((microtime(true) - $start) * 1000);
     http_json($isUpdate ? 200 : 201, [
         'ok' => true,
@@ -310,6 +318,13 @@ function handle_heartbeat(PDO $pdo, string $reqId, float $start) {
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
 
+    // Best-effort audit trail for history charts.
+    try {
+        record_heartbeat_sample($pdo, $serverId, 'heartbeat');
+    } catch (Throwable $e) {
+        // Keep heartbeat path resilient even if history insert fails.
+    }
+
     $elapsed = (int)round((microtime(true) - $start) * 1000);
     http_json(200, [
         'ok' => true,
@@ -320,6 +335,57 @@ function handle_heartbeat(PDO $pdo, string $reqId, float $start) {
         'req_id' => $reqId,
         'ms' => $elapsed,
     ]);
+}
+
+function ensure_heartbeat_samples_schema(PDO $pdo): void {
+    $schema = [
+        'id'            => ['type' => 'INTEGER PRIMARY KEY AUTOINCREMENT'],
+        'server_id'     => ['type' => 'TEXT NOT NULL'],
+        'hostname'      => ['type' => "TEXT DEFAULT ''"],
+        'location'      => ['type' => "TEXT DEFAULT 'lan'"],
+        'status'        => ['type' => "TEXT DEFAULT 'online'"],
+        'load_1m'       => ['type' => 'REAL DEFAULT 0'],
+        'load_5m'       => ['type' => 'REAL DEFAULT 0'],
+        'load_15m'      => ['type' => 'REAL DEFAULT 0'],
+        'mem_total_mb'  => ['type' => 'INTEGER DEFAULT 0'],
+        'mem_used_mb'   => ['type' => 'INTEGER DEFAULT 0'],
+        'disk_total_gb' => ['type' => 'INTEGER DEFAULT 0'],
+        'disk_used_gb'  => ['type' => 'INTEGER DEFAULT 0'],
+        'sampled_at'    => ['type' => "TEXT DEFAULT (datetime('now'))"],
+        'source_action' => ['type' => "TEXT DEFAULT ''"],
+    ];
+
+    ensureTableAndColumns($pdo, 'heartbeat_samples', $schema);
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_heartbeat_samples_time ON heartbeat_samples(sampled_at)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_heartbeat_samples_server_time ON heartbeat_samples(server_id, sampled_at)');
+}
+
+function record_heartbeat_sample(PDO $pdo, string $serverId, string $sourceAction): void {
+    $sel = $pdo->prepare('SELECT server_id, hostname, location, status, load_1m, load_5m, load_15m, mem_total_mb, mem_used_mb, disk_total_gb, disk_used_gb, last_seen FROM servers WHERE server_id = ? LIMIT 1');
+    $sel->execute([$serverId]);
+    $row = $sel->fetch(PDO::FETCH_ASSOC);
+    if (!is_array($row)) return;
+
+    $ins = $pdo->prepare('
+        INSERT INTO heartbeat_samples
+            (server_id, hostname, location, status, load_1m, load_5m, load_15m, mem_total_mb, mem_used_mb, disk_total_gb, disk_used_gb, sampled_at, source_action)
+        VALUES
+            (:server_id, :hostname, :location, :status, :load_1m, :load_5m, :load_15m, :mem_total_mb, :mem_used_mb, :disk_total_gb, :disk_used_gb, :sampled_at, :source_action)
+    ');
+    $ins->bindValue(':server_id', (string)($row['server_id'] ?? $serverId), PDO::PARAM_STR);
+    $ins->bindValue(':hostname', (string)($row['hostname'] ?? ''), PDO::PARAM_STR);
+    $ins->bindValue(':location', (string)($row['location'] ?? 'lan'), PDO::PARAM_STR);
+    $ins->bindValue(':status', (string)($row['status'] ?? 'online'), PDO::PARAM_STR);
+    $ins->bindValue(':load_1m', (float)($row['load_1m'] ?? 0));
+    $ins->bindValue(':load_5m', (float)($row['load_5m'] ?? 0));
+    $ins->bindValue(':load_15m', (float)($row['load_15m'] ?? 0));
+    $ins->bindValue(':mem_total_mb', (int)($row['mem_total_mb'] ?? 0), PDO::PARAM_INT);
+    $ins->bindValue(':mem_used_mb', (int)($row['mem_used_mb'] ?? 0), PDO::PARAM_INT);
+    $ins->bindValue(':disk_total_gb', (int)($row['disk_total_gb'] ?? 0), PDO::PARAM_INT);
+    $ins->bindValue(':disk_used_gb', (int)($row['disk_used_gb'] ?? 0), PDO::PARAM_INT);
+    $ins->bindValue(':sampled_at', (string)($row['last_seen'] ?? gmdate('Y-m-d H:i:s')), PDO::PARAM_STR);
+    $ins->bindValue(':source_action', $sourceAction, PDO::PARAM_STR);
+    $ins->execute();
 }
 
 function handle_list(PDO $pdo, string $reqId, float $start) {

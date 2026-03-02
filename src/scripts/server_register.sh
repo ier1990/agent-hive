@@ -5,8 +5,11 @@
 # Usage:
 #   AGENTHIVE_URL=http://192.168.1.10 AGENTHIVE_API_KEY=srv-lan-01-xxxx bash server_register.sh
 #
-# Run on startup via cron (@reboot) or systemd, e.g.:
-#   @reboot AGENTHIVE_URL=http://hive AGENTHIVE_API_KEY=mykey /web/private/scripts/server_register.sh
+# Snapshot mode (default): collect sysinfo once, send to receiver API, exit.
+# This is dispatcher/cron-friendly.
+#
+# Optional daemon mode (explicit):
+#   AGENTHIVE_URL=http://hive AGENTHIVE_API_KEY=mykey /web/private/scripts/server_register.sh --daemon
 #
 # Environment variables:
 #   AGENTHIVE_URL        - Base URL of the AgentHive instance (required)
@@ -26,6 +29,16 @@ HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-}"
 SERVER_ID_FILE="${SERVER_ID_FILE:-/web/private/server_id}"
 SERVER_LOCATION="${SERVER_LOCATION:-}"
 CLUSTER_CONFIG_FILE="${CLUSTER_CONFIG_FILE:-/web/private/config/cluster_receiver.json}"
+RUN_ONCE=0
+RUN_DAEMON=0
+
+for arg in "$@"; do
+    if [ "$arg" = "--once" ]; then
+        RUN_ONCE=1
+    elif [ "$arg" = "--daemon" ] || [ "$arg" = "--loop" ]; then
+        RUN_DAEMON=1
+    fi
+done
 
 load_cluster_defaults() {
     local cfg="$1"
@@ -231,47 +244,50 @@ build_heartbeat_payload() {
 EOJSON
 }
 
-# ---------- Register ----------
+# ---------- Register / Heartbeat ----------
 
-echo "[$(date -Iseconds)] Registering with $AGENTHIVE_URL/v1/servers/register ..."
+register_server() {
+    local payload response ok server_id id_dir
 
-payload="$(build_register_payload)"
-response="$(curl -s -X POST \
-    "${AGENTHIVE_URL}/v1/servers/register" \
-    -H "X-API-Key: $AGENTHIVE_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "$payload" \
-    --max-time 15)"
+    echo "[$(date -Iseconds)] Registering with $AGENTHIVE_URL/v1/servers/register ..."
 
-# Extract server_id from response
-ok="$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('ok',''))" 2>/dev/null || echo "")"
+    payload="$(build_register_payload)"
+    response="$(curl -s -X POST \
+        "${AGENTHIVE_URL}/v1/servers/register" \
+        -H "X-API-Key: $AGENTHIVE_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        --max-time 15)"
 
-if [ "$ok" != "True" ] && [ "$ok" != "true" ]; then
-    echo "ERROR: Registration failed. Response: $response" >&2
-    exit 1
-fi
+    ok="$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('ok',''))" 2>/dev/null || echo "")"
+    if [ "$ok" != "True" ] && [ "$ok" != "true" ]; then
+        echo "ERROR: Registration failed. Response: $response" >&2
+        return 1
+    fi
 
-server_id="$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('server_id',''))" 2>/dev/null || echo "")"
+    server_id="$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('server_id',''))" 2>/dev/null || echo "")"
+    if [ -z "$server_id" ]; then
+        echo "ERROR: No server_id in response. Response: $response" >&2
+        return 1
+    fi
 
-if [ -z "$server_id" ]; then
-    echo "ERROR: No server_id in response. Response: $response" >&2
-    exit 1
-fi
+    id_dir="$(dirname "$SERVER_ID_FILE")"
+    if [ ! -d "$id_dir" ]; then
+        mkdir -p "$id_dir"
+    fi
+    echo "$server_id" > "$SERVER_ID_FILE"
+    echo "[$(date -Iseconds)] Registered as server_id=$server_id"
+    return 0
+}
 
-# Persist server_id
-id_dir="$(dirname "$SERVER_ID_FILE")"
-if [ ! -d "$id_dir" ]; then
-    mkdir -p "$id_dir"
-fi
-echo "$server_id" > "$SERVER_ID_FILE"
-echo "[$(date -Iseconds)] Registered as server_id=$server_id"
+send_heartbeat() {
+    local hb_payload hb_response hb_ok hb_error server_id
 
-# ---------- Heartbeat loop ----------
-
-echo "[$(date -Iseconds)] Starting heartbeat loop (interval=${HEARTBEAT_INTERVAL}s) ..."
-
-while true; do
-    sleep "$HEARTBEAT_INTERVAL"
+    server_id="$(cat "$SERVER_ID_FILE" 2>/dev/null | tr -d '[:space:]')"
+    if [ -z "$server_id" ]; then
+        echo "WARN: server_id is missing; registration required before heartbeat." >&2
+        return 2
+    fi
 
     hb_payload="$(build_heartbeat_payload)"
     hb_response="$(curl -s -X POST \
@@ -282,10 +298,45 @@ while true; do
         --max-time 10 2>/dev/null || echo '{"ok":false}')"
 
     hb_ok="$(echo "$hb_response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ok',''))" 2>/dev/null || echo "")"
-
     if [ "$hb_ok" = "True" ] || [ "$hb_ok" = "true" ]; then
         echo "[$(date -Iseconds)] Heartbeat OK"
-    else
-        echo "[$(date -Iseconds)] Heartbeat failed: $hb_response" >&2
+        return 0
+    fi
+
+    hb_error="$(echo "$hb_response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error',''))" 2>/dev/null || echo "")"
+    echo "[$(date -Iseconds)] Heartbeat failed: $hb_response" >&2
+    if [ "$hb_error" = "server_not_found" ]; then
+        return 2
+    fi
+    return 1
+}
+
+# Ensure we have a registration at least once.
+if [ ! -s "$SERVER_ID_FILE" ]; then
+    register_server || exit 1
+fi
+
+if [ "$RUN_DAEMON" != "1" ] || [ "$RUN_ONCE" = "1" ]; then
+    if send_heartbeat; then
+        exit 0
+    fi
+    echo "[$(date -Iseconds)] Heartbeat failed in snapshot mode; trying re-register + retry..." >&2
+    register_server || exit 1
+    send_heartbeat || exit 1
+    exit 0
+fi
+
+echo "[$(date -Iseconds)] Starting daemon heartbeat loop (interval=${HEARTBEAT_INTERVAL}s) ..."
+
+while true; do
+    sleep "$HEARTBEAT_INTERVAL"
+    if send_heartbeat; then
+        continue
+    fi
+
+    # Auto-heal if server_id was lost on receiver side.
+    echo "[$(date -Iseconds)] Attempting re-register after heartbeat failure..." >&2
+    if register_server; then
+        send_heartbeat || true
     fi
 done

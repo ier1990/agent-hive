@@ -184,7 +184,30 @@ function kb_redirect($query=''){ // $query without leading ?
   exit;
 }
 
-$Script_Directory = "/web/private/scripts"; 
+$Script_Source_Directory = '/web/html/src/scripts';
+$Script_Wrapper_Directory = '/web/private/scripts';
+if (!is_dir($Script_Source_Directory) && is_dir($Script_Wrapper_Directory)) {
+  // Backward-safe fallback on hosts that have not deployed src/scripts yet.
+  $Script_Source_Directory = $Script_Wrapper_Directory;
+}
+
+function script_rel_safe($rel) {
+  $rel = ltrim(str_replace('\\', '/', (string)$rel), '/');
+  if (strpos($rel, '..') !== false) return '';
+  return $rel;
+}
+
+function script_source_path($rel, $sourceDir) {
+  $rel = script_rel_safe($rel);
+  if ($rel === '') return '';
+  return rtrim((string)$sourceDir, '/') . '/' . $rel;
+}
+
+function script_wrapper_path($rel, $wrapperDir) {
+  $rel = script_rel_safe($rel);
+  if ($rel === '') return '';
+  return rtrim((string)$wrapperDir, '/') . '/' . $rel;
+}
 
 // Settings source of truth: CodeWalker settings DB.
 $cw = function_exists('codewalker_llm_settings') ? codewalker_llm_settings() : [];
@@ -391,7 +414,7 @@ function ai_generate_help_markdown($filePath,$filename,$modelPrimary,$modelFallb
   return [$md,$summaryText];
 }
 
-// Recursive scan for scripts under $Script_Directory (PHP and Python)
+// Recursive scan for scripts under source dir (PHP/Python/Bash configured by extensions).
 function scanEndpoints($root, $allowedExts){
   $out=[]; if(!is_dir($root)) return $out;
   $allowed = is_array($allowedExts) ? $allowedExts : [];
@@ -447,7 +470,7 @@ function generateSummaryFromFile($file){
 
 // Auto-sync scripts directory into the DB.
 // This replaces the manual "Sync" button: the page keeps itself up to date.
-function kb_sync_scripts_into_db($db, $scriptDir, $allowedExts, $debug = false, &$debugErrors = null) {
+function kb_sync_scripts_into_db($db, $scriptDir, $allowedExts, $wrapperDir = '', $debug = false, &$debugErrors = null) {
   if (!($db instanceof SQLite3)) return ['found' => 0, 'added' => 0, 'updated' => 0, 'changed' => 0];
   if (!is_dir($scriptDir)) return ['found' => 0, 'added' => 0, 'updated' => 0, 'changed' => 0];
 
@@ -490,8 +513,9 @@ function kb_sync_scripts_into_db($db, $scriptDir, $allowedExts, $debug = false, 
         'rel_path' => $ep['path'],
         'abs_path' => $ep['file'],
         'language' => $ep['method'],
-        'captured_at' => gmdate('c'),
-        'skipped' => 'file too large or size unknown'
+      'captured_at' => gmdate('c'),
+      'wrapper_path' => script_wrapper_path($ep['path'], $wrapperDir),
+      'skipped' => 'file too large or size unknown'
       ];
       kv_set($db, $scope, 'source_meta', json_encode($meta, JSON_UNESCAPED_UNICODE));
       continue;
@@ -522,6 +546,7 @@ function kb_sync_scripts_into_db($db, $scriptDir, $allowedExts, $debug = false, 
       'abs_path' => $ep['file'],
       'language' => $ep['method'],
       'captured_at' => gmdate('c'),
+      'wrapper_path' => script_wrapper_path($ep['path'], $wrapperDir),
     ];
     kv_set($db, $scope, 'source_code', $code);
     kv_set($db, $scope, 'source_meta', json_encode($meta, JSON_UNESCAPED_UNICODE));
@@ -571,7 +596,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $id = (int)($_POST['id'] ?? 0);
     $row = $db->querySingle('SELECT name, path FROM endpoint WHERE id=' . $id, true);
     if ($row) {
-      $file = rtrim($Script_Directory, '/') . '/' . $row['path'];
+      $file = script_source_path($row['path'], $Script_Source_Directory);
       $sum = generateSummaryFromFile($file);
       if ($sum === '') $sum = '(No leading comments found)';
 
@@ -603,7 +628,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $modelPrimary = $modelOverride !== '' ? $modelOverride : $AI_MODEL_PRIMARY;
 
     $rel = $row['name'];
-    $file = rtrim($Script_Directory, '/') . '/' . $rel;
+    $file = script_source_path($rel, $Script_Source_Directory);
 
     try {
       $used = [];
@@ -645,7 +670,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
       kb_redirect($IS_EMBED ? 'embed=1' : '');
     }
 
-    $file = rtrim($Script_Directory, '/') . '/' . $row['path'];
+    $file = script_source_path($row['path'], $Script_Source_Directory);
     $scope = 'endpoint:' . $row['name'];
     $maxBytes = 1024 * 1024; // 1 MiB safety cap
     $fs = @filesize($file);
@@ -682,7 +707,7 @@ try {
   $last = (int)($_SESSION['kb_last_scripts_sync'] ?? 0);
   if (($now - $last) >= 10) {
     $_SESSION['kb_last_scripts_sync'] = $now;
-    $AUTO_SYNC_STATS = kb_sync_scripts_into_db($db, $Script_Directory, $SCRIPT_FILE_TYPES, !empty($DEBUG), $errors);
+    $AUTO_SYNC_STATS = kb_sync_scripts_into_db($db, $Script_Source_Directory, $SCRIPT_FILE_TYPES, $Script_Wrapper_Directory, !empty($DEBUG), $errors);
   }
 } catch (Throwable $t) {
   if (!empty($DEBUG)) {
@@ -703,9 +728,15 @@ ksort($byFolder);
 // Selected endpoint detail
 $selectedId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected = null; if($selectedId){ $selected = $db->querySingle('SELECT * FROM endpoint WHERE id='.$selectedId, true); }
+$selectedSourcePath = '';
+$selectedWrapperPath = '';
+$selectedWrapperExists = false;
 $selectedHelpMd = null;
 $selectedHelpHtml = null;
 if($selected){
+  $selectedSourcePath = script_source_path((string)$selected['path'], $Script_Source_Directory);
+  $selectedWrapperPath = script_wrapper_path((string)$selected['path'], $Script_Wrapper_Directory);
+  $selectedWrapperExists = ($selectedWrapperPath !== '' && is_file($selectedWrapperPath));
   $scope='endpoint:'.$selected['name'];
   $selectedHelpMd = kv_get($db,$scope,'help_md'); // latest
   $selectedHelpMdAll = kv_get_all($db,$scope,'help_md');
@@ -808,6 +839,11 @@ $fl = flashes();
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold text-gray-800 mb-1 break-words"><?php echo h($selected['name']); ?></h2>
                 <div class="text-xs text-gray-500 break-words">Type: <span class="font-semibold text-indigo-600"><?php echo h($selected['method']); ?></span> • Path: <span class="font-mono"><?php echo h($selected['path']); ?></span></div>
+                <div class="text-xs text-gray-500 break-words mt-1">
+                  Source: <span class="font-mono"><?php echo h($selectedSourcePath); ?></span><br>
+                  Wrapper: <span class="font-mono"><?php echo h($selectedWrapperPath); ?></span>
+                  <?php if($selectedWrapperExists): ?><span class="text-green-600"> (present)</span><?php else: ?><span class="text-amber-600"> (missing)</span><?php endif; ?>
+                </div>
                 <div class="mt-2 text-xs text-gray-600 break-words">
                   AI Model Override: <span class="font-mono"><?php echo h($selectedModelOverride ?? ''); ?></span>
                   <?php if(!empty($selectedAiRunMeta) && is_array($selectedAiRunMeta)): ?>
@@ -988,7 +1024,3 @@ if (!empty($DEBUG)) {
 }
 
 ?>
-
-
-
-
