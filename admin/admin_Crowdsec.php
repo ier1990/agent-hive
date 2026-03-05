@@ -4,7 +4,60 @@
  * Monitor and manage Crowdsec intrusion detection and firewall bouncer
  * Crowdsec runs as root, but we can display status and common management commands
  */
-
+/*
+|--------------------------------------------------------------------------
+| CrowdSec Notes (Lockout Recovery + Whitelist Gotcha)
+|--------------------------------------------------------------------------
+|
+| IMPORTANT:
+|   The whitelist file that CrowdSec actually reads (default install) is:
+|     /etc/crowdsec/parsers/s02-enrich/whitelists.yaml
+|
+|   NOT:
+|     /etc/crowdsec/whitelists.yaml   (this does nothing unless explicitly configured)
+|
+| Why it matters:
+|   We got locked out after installing CrowdSec because our whitelist edits were
+|   made in the wrong location. CrowdSec continued banning home IP mid-SSH session.
+|
+| Quick commands (run as root or with sudo):
+|
+|   # list bans
+|   cscli decisions list
+|
+|   # unban home
+|   cscli decisions delete --ip ??.??.??.???
+|
+|   # or wipe all decisions (good during recovery)
+|   cscli decisions delete --all
+|
+|   # restart services
+|   systemctl restart crowdsec
+|   systemctl restart crowdsec-firewall-bouncer
+|
+|   # check fail2ban too (if installed)
+|   fail2ban-client status sshd
+|   fail2ban-client set sshd unbanip ??.??.??.???
+|
+| Whitelist template (edit to match current infra):
+|
+|   nano /etc/crowdsec/parsers/s02-enrich/whitelists.yaml
+|
+|   name: trusted
+|   description: trusted nodes
+|   whitelist:
+|     reason: infrastructure
+|     ip:
+|       - "??.??.??.???"      # home
+|       - "??.??.??.???"       # other WAN
+|     cidr:
+|       - "100.64.0.0/10"      # tailscale mesh
+|       - "192.168.0.0/24"     # lan
+|
+| After editing:
+|   systemctl restart crowdsec
+|
+*/
 require_once __DIR__ . '/../lib/bootstrap.php';
 require_once APP_LIB . '/auth/auth.php';
 auth_require_admin();
@@ -211,6 +264,10 @@ sudo systemctl enable --now crowdsec
 sudo systemctl enable --now crowdsec-firewall-bouncer</pre>
         </div>
 
+
+    
+
+
         <h4>Then Install Common Rules/Scenarios:</h4>
         <div class="code-section">
             <pre>sudo cscli collections install crowdsecurity/linux
@@ -222,6 +279,13 @@ sudo cscli scenarios install crowdsecurity/http-scan
 sudo cscli hub install crowdsecurity/blocklist-ip</pre>
         </div>
 
+
+
+
+
+
+
+
         <h4>Installation Tips:</h4>
         <ul>
             <li>Crowdsec requires root access to manage firewall rules via IPtables/nftables</li>
@@ -230,7 +294,91 @@ sudo cscli hub install crowdsecurity/blocklist-ip</pre>
             <li>After install, verify with: <code>sudo systemctl status crowdsec</code></li>
         </ul>
     </div>
+
+
+
+<div class="code-section">
+<pre>
+Notes to add
+
+sometimes the firewall bouncer is auto‑installed, sometimes it isn’t, and the only reliable way to know is to check what packages actually landed on your system.
+
+🧩 What the installer always does
+The script you ran:
+curl -s https://install.crowdsec.net | sudo sh
+
+always performs these steps:
+- adds the CrowdSec APT repo
+- imports the GPG key
+- updates apt
+- installs the core crowdsec service
+But the firewall bouncer is optional and not guaranteed to be installed automatically.
+
+🔍 How to check if the firewall bouncer is installed
+Run this on .191:
+dpkg -l | grep crowdsec
+
+
+You’ll see something like:
+ii  crowdsec                       1.x.x
+ii  crowdsec-firewall-bouncer-iptables   1.x.x
+
+
+If you see the second line, then yes — it was auto‑installed.
+If you only see:
+ii  crowdsec
+
+
+then the bouncer is not installed yet.
+
+🛠️ Install the firewall bouncer manually (if missing)
+sudo apt install crowdsec-firewall-bouncer-iptables
+
+
+This is the recommended bouncer for Debian/Ubuntu servers using iptables or nftables.
+
+🧠 Why this matters for your .191 node
+Your box:
+- accepts SSH
+- runs agent-hive
+- syncs with main server
+- may expose internal ports
+CrowdSec + the firewall bouncer gives you:
+- automatic blocking of brute‑force SSH attempts
+- protection against common scans
+- low overhead (perfect for a lightweight relay node)
+It won’t interfere with rsync or your agent mesh.
+</pre>
+</div>
+
     <?php endif; ?>
+
+
+        
+<div class="code-section">
+<h4>⚠️ CrowdSec Notes (Lockout Recovery + Whitelist Gotcha)</h4>    
+<pre>        
+|--------------------------------------------------------------------------
+|
+| IMPORTANT:
+|   The whitelist file that CrowdSec actually reads (default install) is:
+|     /etc/crowdsec/parsers/s02-enrich/whitelists.yaml
+|
+|   NOT:
+|     /etc/crowdsec/whitelists.yaml   (this does nothing unless explicitly configured)
+|
+| Why it matters:
+|   We got locked out after installing CrowdSec because our whitelist edits were
+|   made in the wrong location. CrowdSec continued banning home IP mid-SSH session.
+|
+| So use: 
+| nano /etc/crowdsec/parsers/s02-enrich/whitelists.yaml
+| systemctl restart crowdsec
+|
+|--------------------------------------------------------------------------
+</pre>
+</div>
+
 
     <!-- Service Management -->
     <h2>Service Management (Requires sudo or root)</h2>
