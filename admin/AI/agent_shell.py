@@ -1,11 +1,55 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import atexit
 import argparse
 from typing import Optional
 
-from agent_common import colorize, tty_supports_color
+from agent_common import DEFAULT_PRIVATE_ROOT, colorize, tty_supports_color
 from agent_runtime import AliveAgent
+
+try:
+    import readline
+except ImportError:
+    readline = None
+
+
+HISTORY_FILE = DEFAULT_PRIVATE_ROOT / "logs" / "agent_shell_history.log"
+HISTORY_LENGTH = 500
+
+
+def setup_readline() -> None:
+    if readline is None:
+        return
+    try:
+        readline.parse_and_bind("set editing-mode emacs")
+    except Exception:
+        pass
+    try:
+        readline.parse_and_bind("tab: complete")
+    except Exception:
+        pass
+    try:
+        readline.set_history_length(HISTORY_LENGTH)
+    except Exception:
+        pass
+    if not HISTORY_FILE.parent.exists():
+        return
+    try:
+        readline.read_history_file(str(HISTORY_FILE))
+    except FileNotFoundError:
+        pass
+    except Exception:
+        return
+
+    def save_history() -> None:
+        try:
+            readline.set_history_length(HISTORY_LENGTH)
+            readline.write_history_file(str(HISTORY_FILE))
+        except Exception:
+            return
+
+    atexit.register(save_history)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,6 +108,12 @@ def status_block(agent: AliveAgent, debug: bool) -> str:
     search_url = ""
     if isinstance(search_cfg, dict):
         search_url = str(search_cfg.get("searx_url", "") or "")
+    startup_prompt = ""
+    if hasattr(agent, "startup_greeting_prompt"):
+        startup_prompt = str(getattr(agent, "startup_greeting_prompt", "") or "")
+    startup_enabled = False
+    if hasattr(agent, "startup_greeting_enabled"):
+        startup_enabled = bool(getattr(agent, "startup_greeting_enabled", False))
     return "\n".join(
         [
             "Status",
@@ -78,6 +128,8 @@ def status_block(agent: AliveAgent, debug: bool) -> str:
             "Code root  : %s" % agent.code_root,
             "Notes DB   : %s" % agent.notes_db,
             "Boot prompt: %s" % agent.boot_prompt_path,
+            "Startup hi : %s" % ("on" if startup_enabled else "off"),
+            "Hello text : %s" % startup_prompt,
             "Debug      : %s" % ("on" if debug else "off"),
         ]
     )
@@ -89,6 +141,7 @@ def help_block() -> str:
             "Slash commands",
             "--------------",
             "/help       Show this help",
+            "/hello      Run the startup greeting bypass against the model",
             "/status     Show current backend, model, paths, and runtime settings",
             "/debug      Show whether debug mode is on",
             "/debug on   Enable debug logging to stderr",
@@ -111,6 +164,12 @@ def handle_slash_command(agent: AliveAgent, command: str, debug: bool) -> Option
 
     if lower == "/help":
         print("\n" + help_block())
+        return debug
+    if lower == "/hello":
+        try:
+            print("\n" + agent.startup_greeting())
+        except Exception as e:
+            print("\nStartup greeting failed: %s" % e)
         return debug
     if lower == "/status":
         print("\n" + status_block(agent, debug))
@@ -231,9 +290,17 @@ def handle_slash_command(agent: AliveAgent, command: str, debug: bool) -> Option
     return debug
 
 
-def interactive_loop(agent: AliveAgent, debug: bool) -> int:
+def interactive_loop(agent: AliveAgent, debug: bool, startup_greeting_enabled: bool = False, startup_greeting_prompt: str = "") -> int:
     debug_enabled = debug
+    setup_readline()
     print(banner_block(agent, debug_enabled))
+    if startup_greeting_enabled:
+        try:
+            greeting = agent.startup_greeting(startup_greeting_prompt)
+            if greeting.strip() != "":
+                print("\n" + greeting)
+        except Exception as e:
+            print("\nStartup greeting failed: %s" % e)
     while True:
         try:
             prompt = "\nagent"

@@ -207,7 +207,8 @@ The new AI shell is a local-first engineering agent that can use built-in tools,
   - exposes `agent_tool_list` and `agent_tool_run`
 - **Interactive shell**:
   - styled TTY banner
-  - slash commands for backend status, search status, memory status, and approved tool listing
+  - slash commands for backend status, search status, memory status, approved tool listing, and manual startup greeting
+  - optional startup greeting warmup to load local models before normal tool-loop runs
 
 **Admin Pages:**
 - `/admin/AI/` — landing page for the agent area

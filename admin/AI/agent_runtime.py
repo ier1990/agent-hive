@@ -210,6 +210,26 @@ class AliveAgent:
         except Exception as e:
             raise RuntimeError("LLM request failed: %s" % e)
 
+    def startup_greeting(self, prompt: str = "") -> str:
+        greeting_prompt = str(prompt or "").strip()
+        if greeting_prompt == "":
+            greeting_prompt = "Say a short greeting and introduce yourself in 2 short sentences."
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are the AgentHive shell startup greeter. "
+                    "Reply in plain text only. "
+                    "Do not use JSON. "
+                    "Do not call tools. "
+                    "Keep it short and friendly."
+                ),
+            },
+            {"role": "user", "content": greeting_prompt},
+        ]
+        return self._chat_completion(messages).strip()
+
     def _tool_notes_search(self, query: str, limit: int) -> Dict[str, Any]:
         if not self.notes_db.exists():
             return {"ok": False, "error": "notes_db_missing", "notes_db": str(self.notes_db)}

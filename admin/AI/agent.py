@@ -32,6 +32,8 @@ def main() -> int:
         max_steps=int(args.max_steps if args.max_steps is not None else int(profile.get("max_steps", 6) or 6)),
         temperature=float(args.temperature if args.temperature is not None else float(profile.get("temperature", 0.2) or 0.2)),
     )
+    agent.startup_greeting_enabled = bool(profile.get("startup_greeting_enabled", False))
+    agent.startup_greeting_prompt = str(profile.get("startup_greeting_prompt", "") or "")
 
     if args.list_models:
         try:
@@ -55,7 +57,12 @@ def main() -> int:
             print("Hint: run --list-models and choose a loaded --model.", file=sys.stderr)
             return 1
 
-    return interactive_loop(agent, debug=(args.debug if args.debug is not None else bool(profile.get("debug", False))))
+    return interactive_loop(
+        agent,
+        debug=(args.debug if args.debug is not None else bool(profile.get("debug", False))),
+        startup_greeting_enabled=agent.startup_greeting_enabled,
+        startup_greeting_prompt=agent.startup_greeting_prompt,
+    )
 
 
 if __name__ == "__main__":

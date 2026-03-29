@@ -12,5 +12,7 @@
   "tool_settings_path": "/web/private/agent_tools.json",
   "max_steps": 6,
   "temperature": 0.2,
-  "debug": false
+  "debug": false,
+  "startup_greeting_enabled": true,
+  "startup_greeting_prompt": "Say a short greeting and introduce yourself in 2 short sentences."
 }
