@@ -7,7 +7,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
 require_once dirname(__DIR__, 2) . '/lib/bootstrap.php';
 api_guard_once('push', true);
 
-$SCRIPTS_DIR = '/web/private/scripts';
+$SCRIPTS_DIR = defined('PRIVATE_SCRIPTS') ? (string)PRIVATE_SCRIPTS : '/web/private/scripts';
 @mkdir($SCRIPTS_DIR, 0775, true);
 
 

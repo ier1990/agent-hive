@@ -10,6 +10,7 @@ if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
 require_once dirname(__DIR__) . '/lib/bootstrap.php';
 
 require_once __DIR__ . '/AI_Templates/AI_Template.php';
+require_once __DIR__ . '/lib/codewalker_runner.php';
 
 $ai = new AI_Template([
 	'debug' => true,
@@ -53,7 +54,60 @@ $GLOBALS['KB_DEBUG'] = $DEBUG;
 
 // Shared AI configuration is managed via admin_AI_Setup.php
 
-function h($s){return htmlspecialchars((string)$s, ENT_QUOTES,'UTF-8');}
+//function h($s){return htmlspecialchars((string)$s, ENT_QUOTES,'UTF-8');}
+
+
+function scripts_codewalker_summary_from_text($text)
+{
+  $text = trim((string)$text);
+  if ($text === '') return '';
+  $decoded = json_decode($text, true);
+  if (is_array($decoded)) {
+    if (isset($decoded['summary']) && is_string($decoded['summary'])) {
+      return trim((string)$decoded['summary']);
+    }
+    if (isset($decoded['raw']) && is_string($decoded['raw'])) {
+      return trim((string)$decoded['raw']);
+    }
+  }
+  return $text;
+}
+
+function scripts_codewalker_latest_summary_by_path($path)
+{
+  $cfg = function_exists('cw_settings_get_all') ? cw_settings_get_all() : [];
+  $dbPath = isset($cfg['db_path']) ? (string)$cfg['db_path'] : '';
+  if ($dbPath === '' || !is_file($dbPath)) return '';
+  $pdo = cw_cwdb_pdo($dbPath);
+  cw_cwdb_init($pdo);
+  $stmt = $pdo->prepare('SELECT s.summary
+    FROM actions a
+    JOIN files f ON f.id = a.file_id
+    JOIN summaries s ON s.action_id = a.id
+    WHERE f.path = ? AND a.action = ? AND a.status = ?
+    ORDER BY a.id DESC
+    LIMIT 1');
+  $stmt->execute([(string)$path, 'summarize', 'ok']);
+  $row = $stmt->fetch(PDO::FETCH_ASSOC);
+  if (!is_array($row)) return '';
+  return scripts_codewalker_summary_from_text((string)($row['summary'] ?? ''));
+}
+
+function scripts_codewalker_summary_by_action_id($actionId)
+{
+  $aid = (int)$actionId;
+  if ($aid <= 0) return '';
+  $cfg = function_exists('cw_settings_get_all') ? cw_settings_get_all() : [];
+  $dbPath = isset($cfg['db_path']) ? (string)$cfg['db_path'] : '';
+  if ($dbPath === '' || !is_file($dbPath)) return '';
+  $pdo = cw_cwdb_pdo($dbPath);
+  cw_cwdb_init($pdo);
+  $stmt = $pdo->prepare('SELECT summary FROM summaries WHERE action_id = ? LIMIT 1');
+  $stmt->execute([$aid]);
+  $row = $stmt->fetch(PDO::FETCH_ASSOC);
+  if (!is_array($row)) return '';
+  return scripts_codewalker_summary_from_text((string)($row['summary'] ?? ''));
+}
 
 function help_inline_format($escaped)
 {
@@ -184,12 +238,13 @@ function kb_redirect($query=''){ // $query without leading ?
   exit;
 }
 
-$Script_Source_Directory = '/web/html/src/scripts';
-$Script_Wrapper_Directory = '/web/private/scripts';
+$Script_Source_Directory = defined('APP_SOURCE_SCRIPTS') ? (string)APP_SOURCE_SCRIPTS : '/web/html/src/scripts';
+$Script_Wrapper_Directory = defined('PRIVATE_SCRIPTS') ? (string)PRIVATE_SCRIPTS : '/web/private/scripts';
 if (!is_dir($Script_Source_Directory) && is_dir($Script_Wrapper_Directory)) {
   // Backward-safe fallback on hosts that have not deployed src/scripts yet.
   $Script_Source_Directory = $Script_Wrapper_Directory;
 }
+
 
 function script_rel_safe($rel) {
   $rel = ltrim(str_replace('\\', '/', (string)$rel), '/');
@@ -433,40 +488,6 @@ function scanEndpoints($root, $allowedExts){
   return $out;
 }
 
-// Generate quick summary heuristically from top comments of file
-function generateSummaryFromFile($file){
-    $code = @file_get_contents($file);
-    if(!$code) return '';
-    // Extract initial block comments or first ~15 lines
-    $lines = preg_split('/\r?\n/',$code);
-  $collected=[]; $count=0; $inTriple=false; $triple='';
-  foreach($lines as $ln){
-    $trim = trim($ln);
-    if($trim==='') continue;
-    if(strpos($trim,'<?php')===0) continue; // ignore PHP tag
-    // Python triple quotes
-    if(!$inTriple && (strpos($trim,'"""')===0 || strpos($trim,"'''")===0)){
-      $inTriple=true; $triple = (strpos($trim,'"""')===0)?'"""':"'''";
-      $collected[] = trim($trim,$triple." ");
-      if(substr_count($trim,$triple)===2){ $inTriple=false; }
-      $count++; if($count>=12) break; else continue;
-    }
-    if($inTriple){
-      $collected[] = rtrim($trim,$triple);
-      if(strpos($trim,$triple)!==false){ $inTriple=false; }
-      $count++; if($count>=12) break; else continue;
-    }
-    // Line comments for PHP //, *, and Python #
-    if(strpos($trim,'/*')===0 || strpos($trim,'//')===0 || strpos($trim,'*')===0 || strpos($trim,'#')===0){
-      $collected[] = preg_replace('/^(\/\/|\*|#)+\s?/','',$trim);
-      $count++;
-    }
-    if($count>=12) break;
-    if(preg_match('/function\s+/i',$trim) || preg_match('/^def\s+/',$trim)) break; // stop at first function/def
-  }
-    $summary = trim(implode(" ", $collected));
-    return substr($summary,0,800);
-}
 
 // Auto-sync scripts directory into the DB.
 // This replaces the manual "Sync" button: the page keeps itself up to date.
@@ -564,47 +585,39 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     kb_redirect($IS_EMBED ? 'embed=1' : '');
   }
 
-  if ($action === 'set_model_override') {
-    $id = (int)($_POST['id'] ?? 0);
-    $row = $db->querySingle('SELECT name FROM endpoint WHERE id=' . $id, true);
-    if (!$row) {
-      flash('error', 'Script not found');
-      kb_redirect($IS_EMBED ? 'embed=1' : '');
-    }
-    $scope = 'endpoint:' . $row['name'];
-    $modelOverride = trim((string)($_POST['model_override'] ?? ''));
-    // Store blank to clear.
-    kv_set($db, $scope, 'ai_model_override', $modelOverride);
-    flash('success', $modelOverride === '' ? 'AI model override cleared.' : 'AI model override saved.');
-    kb_redirect(trim(($IS_EMBED ? 'embed=1&' : '') . 'id=' . $id, '&'));
-  }
-
-  if ($action === 'save_endpoint') {
-    $id = (int)($_POST['id'] ?? 0);
-    $description = trim($_POST['description'] ?? '');
-    $summary     = trim($_POST['summary'] ?? '');
-
-    $stmt = $db->prepare('UPDATE endpoint SET description=?, summary=?, updated_at=strftime("%Y-%m-%dT%H:%M:%SZ","now") WHERE id=?');
-    $stmt->bindValue(1, $description, SQLITE3_TEXT);
-    $stmt->bindValue(2, $summary, SQLITE3_TEXT);
-    $stmt->bindValue(3, $id, SQLITE3_INTEGER);
-    $ok = $stmt->execute();
-
-    flash($ok ? 'success' : 'error', $ok ? 'Script updated.' : 'Update failed.');
-    kb_redirect(trim(($IS_EMBED ? 'embed=1&' : '') . ($ok ? 'id=' . $id : ''), '&'));
-  } elseif ($action === 'auto_summary') {
+  if ($action === 'auto_summary') {
     $id = (int)($_POST['id'] ?? 0);
     $row = $db->querySingle('SELECT name, path FROM endpoint WHERE id=' . $id, true);
     if ($row) {
       $file = script_source_path($row['path'], $Script_Source_Directory);
-      $sum = generateSummaryFromFile($file);
-      if ($sum === '') $sum = '(No leading comments found)';
+      if ($file === '' || !is_file($file)) {
+        flash('error', 'Script source file not found.');
+      } else {
+        try {
+          $res = cw_run_on_file($file, 'summarize');
+          $status = isset($res['status']) ? (string)$res['status'] : 'error';
+          $summary = '';
 
-      $stmt = $db->prepare('UPDATE endpoint SET summary=?, updated_at=strftime("%Y-%m-%dT%H:%M:%SZ","now") WHERE id=?');
-      $stmt->bindValue(1, $sum, SQLITE3_TEXT);
-      $stmt->bindValue(2, $id, SQLITE3_INTEGER);
-      $stmt->execute();
-      flash('success', 'Summary generated from source.');
+          if ($status === 'ok') {
+            $summary = scripts_codewalker_summary_by_action_id((int)($res['action_id'] ?? 0));
+          } elseif ($status === 'skip') {
+            $summary = scripts_codewalker_latest_summary_by_path($file);
+          }
+
+          if ($summary === '') {
+            $err = (string)($res['error'] ?? 'No summary returned from CodeWalker');
+            flash('error', 'Summary generation failed: ' . $err);
+          } else {
+            $stmt = $db->prepare('UPDATE endpoint SET summary=?, updated_at=strftime("%Y-%m-%dT%H:%M:%SZ","now") WHERE id=?');
+            $stmt->bindValue(1, substr($summary, 0, 800), SQLITE3_TEXT);
+            $stmt->bindValue(2, $id, SQLITE3_INTEGER);
+            $stmt->execute();
+            flash('success', 'Summary generated via CodeWalker.');
+          }
+        } catch (Exception $e) {
+          flash('error', 'Summary generation failed: ' . $e->getMessage());
+        }
+      }
     } else {
       flash('error', 'Script not found');
     }
@@ -624,8 +637,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     }
 
     $scope = 'endpoint:' . $row['name'];
-    $modelOverride = trim((string)kv_get($db, $scope, 'ai_model_override'));
-    $modelPrimary = $modelOverride !== '' ? $modelOverride : $AI_MODEL_PRIMARY;
+    $modelPrimary = $AI_MODEL_PRIMARY;
 
     $rel = $row['name'];
     $file = script_source_path($rel, $Script_Source_Directory);
@@ -643,7 +655,6 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         'base_url' => (string)($GLOBALS['AI_BASE_URL'] ?? ''),
         'model_primary' => $modelPrimary,
         'model_fallback' => (string)$AI_MODEL_FALLBACK,
-        'model_override' => $modelOverride,
         'used' => $used,
       ];
       kv_set($db, $scope, 'ai_run_meta', json_encode($run, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
@@ -689,6 +700,63 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         kv_set($db, $scope, 'source_code', $code);
         kv_set($db, $scope, 'source_meta', json_encode($meta, JSON_UNESCAPED_UNICODE));
         flash('success', 'Source captured.');
+
+        // Auto-run summary so this stays a single-click workflow.
+        try {
+          $res = cw_run_on_file($file, 'summarize');
+          $status = isset($res['status']) ? (string)$res['status'] : 'error';
+          $summary = '';
+
+          if ($status === 'ok') {
+            $summary = scripts_codewalker_summary_by_action_id((int)($res['action_id'] ?? 0));
+          } elseif ($status === 'skip') {
+            $summary = scripts_codewalker_latest_summary_by_path($file);
+          }
+
+          if ($summary !== '') {
+            $stmt = $db->prepare('UPDATE endpoint SET summary=?, updated_at=strftime("%Y-%m-%dT%H:%M:%SZ","now") WHERE id=?');
+            $stmt->bindValue(1, substr($summary, 0, 800), SQLITE3_TEXT);
+            $stmt->bindValue(2, $id, SQLITE3_INTEGER);
+            $stmt->execute();
+            flash('success', 'Summary generated via CodeWalker.');
+          } else {
+            $err = (string)($res['error'] ?? 'No summary returned from CodeWalker');
+            flash('error', 'Source stored, but summary failed: ' . $err);
+          }
+        } catch (Exception $e) {
+          flash('error', 'Source stored, but summary failed: ' . $e->getMessage());
+        }
+
+        // Optional AI help generation in the same click.
+        if ($ALLOW_AI) {
+          try {
+            $used = [];
+            list($md, $summaryFromAi) = ai_generate_help_markdown($file, basename($file), $AI_MODEL_PRIMARY, $AI_MODEL_FALLBACK, $OPENAI_API_KEY, $used);
+
+            kv_add($db, $scope, 'help_md', $md);
+
+            $run = [
+              'ran_at' => gmdate('c'),
+              'provider' => (string)($GLOBALS['PROVIDER'] ?? ''),
+              'base_url' => (string)($GLOBALS['AI_BASE_URL'] ?? ''),
+              'model_primary' => $AI_MODEL_PRIMARY,
+              'model_fallback' => (string)$AI_MODEL_FALLBACK,
+              'used' => $used,
+            ];
+            kv_set($db, $scope, 'ai_run_meta', json_encode($run, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+
+            if (!empty($summaryFromAi)) {
+              $stmt = $db->prepare("UPDATE endpoint SET summary=COALESCE(NULLIF(summary,''), ?), updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?");
+              $stmt->bindValue(1, $summaryFromAi, SQLITE3_TEXT);
+              $stmt->bindValue(2, $id, SQLITE3_INTEGER);
+              $stmt->execute();
+            }
+
+            flash('success', 'AI help generated.');
+          } catch (Exception $e) {
+            flash('error', 'Source+summary done, but AI help failed: ' . $e->getMessage());
+          }
+        }
       } else {
         flash('error', 'Failed to read file.');
       }
@@ -745,7 +813,6 @@ if($selected){
     $selectedHelpHtml = kv_get($db,$scope,'help_html');
     $selectedHelpHtmlAll = kv_get_all($db,$scope,'help_html');
   }
-  $selectedModelOverride = trim((string)kv_get($db,$scope,'ai_model_override'));
   $selectedAiRunMetaRaw = (string)kv_get($db,$scope,'ai_run_meta');
   $selectedAiRunMeta = json_decode($selectedAiRunMetaRaw, true);
   if (!is_array($selectedAiRunMeta)) $selectedAiRunMeta = null;
@@ -763,16 +830,10 @@ $fl = flashes();
 </head>
 <body class="bg-gray-50 min-h-screen">
   <div class="bg-gradient-to-r from-sky-500 to-indigo-600 text-white py-5 mb-6">
-    <div class="container mx-auto px-4 flex items-center justify-between">
+    <div class="container mx-auto px-4">
       <div>
         <h1 class="text-2xl font-semibold">🧭 Scripts Knowledge Base</h1>
         <p class="text-sm opacity-90">Indexed Scripts with editable docs & generated summaries</p>
-      </div>
-      <div class="flex flex-wrap gap-2 justify-end">
-        <a href="admin_AI_Templates.php" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-md text-sm whitespace-nowrap">AI Templates</a>
-        <a href="admin_AI_Setup.php<?php echo $IS_EMBED?'?embed=1':''; ?>" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-md text-sm whitespace-nowrap">AI Setup</a>
-        <a href="admin_Crontab.php" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-md text-sm whitespace-nowrap">Crontab</a>
-        <a href="admin_Scripts.php<?php echo $IS_EMBED?'?embed=1':''; ?>" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-md text-sm whitespace-nowrap">Home</a>
       </div>
     </div>
   </div>
@@ -800,6 +861,15 @@ $fl = flashes();
         <?php endforeach; ?>
       </div>
     <?php endif; ?>
+    <div class="mb-6 bg-white rounded-lg shadow p-4 text-xs text-gray-600">
+      Wrappers run from <span class="font-mono"><?php echo h($Script_Wrapper_Directory); ?></span>
+      <?php if(!is_dir($Script_Wrapper_Directory)): ?>
+        <span class="text-amber-600">(missing)</span>
+      <?php else: ?>
+        <span class="text-green-600">(present)</span>
+      <?php endif; ?>
+      • Source scripts are read from <span class="font-mono"><?php echo h($Script_Source_Directory); ?></span>
+    </div>
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       <!-- Tree -->
       <div class="lg:col-span-4 xl:col-span-3 bg-white rounded-lg shadow p-4 flex flex-col max-h-[70vh] overflow-y-auto scroll-thin">
@@ -844,82 +914,25 @@ $fl = flashes();
                   Wrapper: <span class="font-mono"><?php echo h($selectedWrapperPath); ?></span>
                   <?php if($selectedWrapperExists): ?><span class="text-green-600"> (present)</span><?php else: ?><span class="text-amber-600"> (missing)</span><?php endif; ?>
                 </div>
+                <?php if(!empty($selectedAiRunMeta) && is_array($selectedAiRunMeta)): ?>
                 <div class="mt-2 text-xs text-gray-600 break-words">
-                  AI Model Override: <span class="font-mono"><?php echo h($selectedModelOverride ?? ''); ?></span>
-                  <?php if(!empty($selectedAiRunMeta) && is_array($selectedAiRunMeta)): ?>
-                    <span class="text-gray-400"> • Last AI Run: <?php echo h((string)($selectedAiRunMeta['ran_at'] ?? '')); ?></span>
-                  <?php endif; ?>
+                  Last AI Run: <span class="font-mono"><?php echo h((string)($selectedAiRunMeta['ran_at'] ?? '')); ?></span>
                 </div>
+                <?php endif; ?>
               </div>
 
               <div class="w-full lg:w-auto lg:ml-4 flex flex-col gap-3 lg:items-end">
-                <form method="post" class="w-full lg:w-auto flex flex-col sm:flex-row gap-2 sm:items-center">
-                  <?php csrf_input(); ?>
-                  <?php if($IS_EMBED): ?><input type="hidden" name="embed" value="1"><?php endif; ?>
-                  <input type="hidden" name="action" value="set_model_override">
-                  <input type="hidden" name="id" value="<?php echo (int)$selected['id']; ?>">
-                  <input type="text" name="model_override" value="<?php echo h($selectedModelOverride ?? ''); ?>" placeholder="(blank = default)" class="border border-gray-300 rounded px-2 py-1 text-xs w-full sm:w-56">
-                  <div class="flex gap-2 items-center">
-                    <button type="submit" class="text-xs bg-slate-800 hover:bg-slate-900 text-white px-3 py-2 rounded-md whitespace-nowrap">Save Model</button>
-                    <a class="text-xs bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 px-3 py-2 rounded-md whitespace-nowrap" href="admin_Scripts.php?<?php echo $IS_EMBED?'embed=1&':''; ?>id=<?php echo (int)$selected['id']; ?>&models=1<?php echo !empty($DEBUG)?'&debug=1':''; ?>">Load models</a>
-                  </div>
-                </form>
-
                 <div class="w-full lg:w-auto flex flex-wrap gap-2 lg:justify-end">
                   <form method="post" class="inline-block">
                     <?php csrf_input(); ?>
                     <?php if($IS_EMBED): ?><input type="hidden" name="embed" value="1"><?php endif; ?>
-                    <input type="hidden" name="action" value="auto_summary">
-                    <input type="hidden" name="id" value="<?php echo (int)$selected['id']; ?>">
-                    <button type="submit" class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-md whitespace-nowrap">✨ Generate Summary</button>
-                  </form>
-                  <form method="post" class="inline-block" title="Store script source + metadata for vector DB">
-                    <?php csrf_input(); ?>
-                    <?php if($IS_EMBED): ?><input type="hidden" name="embed" value="1"><?php endif; ?>
                     <input type="hidden" name="action" value="store_source">
                     <input type="hidden" name="id" value="<?php echo (int)$selected['id']; ?>">
-                    <button type="submit" class="text-xs bg-slate-600 hover:bg-slate-700 text-white px-3 py-2 rounded-md whitespace-nowrap">🗂️ Store Source</button>
+                    <button type="submit" class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-md whitespace-nowrap">✨ CodeWalker Summary/Store</button>
                   </form>
-                  <?php if($ALLOW_AI): ?>
-                  <form method="post" class="inline-block">
-                    <?php csrf_input(); ?>
-                    <?php if($IS_EMBED): ?><input type="hidden" name="embed" value="1"><?php endif; ?>
-                    <input type="hidden" name="action" value="ai_full">
-                    <input type="hidden" name="id" value="<?php echo (int)$selected['id']; ?>">
-                    <button type="submit" class="text-xs bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-md whitespace-nowrap">🤖 AI Generate Full Help</button>
-                  </form>
-                  <?php endif; ?>
                 </div>
               </div>
             </div>
-            <?php
-              $modelList = null;
-              if ($selected && isset($_GET['models'])) {
-                $modelList = ai_list_models($AI_BASE_URL, $PROVIDER ?? '', $OPENAI_API_KEY);
-              }
-            ?>
-            <?php if(is_array($modelList)): ?>
-              <div class="bg-slate-50 border border-slate-200 rounded p-3 text-xs">
-                <div class="font-semibold text-slate-700">Available Models (<?php echo h((string)($modelList['source'] ?? '')); ?>)</div>
-                <?php if(!empty($modelList['ok'])): ?>
-                  <form method="post" class="mt-2 flex gap-2 items-center">
-                    <?php csrf_input(); ?>
-                    <?php if($IS_EMBED): ?><input type="hidden" name="embed" value="1"><?php endif; ?>
-                    <input type="hidden" name="action" value="set_model_override">
-                    <input type="hidden" name="id" value="<?php echo (int)$selected['id']; ?>">
-                    <select name="model_override" class="border border-gray-300 rounded px-2 py-1 text-xs">
-                      <option value="">(blank = default)</option>
-                      <?php foreach(($modelList['models'] ?? []) as $m): ?>
-                        <option value="<?php echo h($m); ?>" <?php echo ($selectedModelOverride===$m)?'selected':''; ?>><?php echo h($m); ?></option>
-                      <?php endforeach; ?>
-                    </select>
-                    <button type="submit" class="text-xs bg-slate-800 hover:bg-slate-900 text-white px-3 py-2 rounded-md">Use Selected</button>
-                  </form>
-                <?php else: ?>
-                  <div class="mt-1 text-red-700">Failed to load models: <?php echo h((string)($modelList['error'] ?? '')); ?></div>
-                <?php endif; ?>
-              </div>
-            <?php endif; ?>
             <div class="border-t pt-4">
               <h3 class="text-sm font-semibold text-gray-600 mb-2">AI Documentation</h3>
         <?php if(!$ALLOW_AI && empty($selectedHelpMd) && empty($selectedHelpHtml)): ?>
@@ -986,20 +999,9 @@ $fl = flashes();
               <?php endif; ?>
             </div>
 
-            <form method="post" class="space-y-4">
-              <?php csrf_input(); ?>
-              <?php if($IS_EMBED): ?><input type="hidden" name="embed" value="1"><?php endif; ?>
-              <input type="hidden" name="action" value="save_endpoint">
-              <input type="hidden" name="id" value="<?php echo (int)$selected['id']; ?>">
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Description (manual)</label>
-                <textarea name="description" rows="4" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Human-friendly purpose / usage notes..."><?php echo h($selected['description']); ?></textarea>
-              </div>
-
-              <div class="flex justify-end gap-3">
-                <button type="submit" class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium px-5 py-2 rounded-md">💾 Save</button>
-              </div>
-            </form>
+            <div class="text-xs text-gray-500 border-t pt-4">
+              Manual model selection and manual description editing were removed to keep this page focused on script discovery, source capture, and generated help.
+            </div>
           </div>
         <?php endif; ?>
       </div>

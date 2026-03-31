@@ -5,7 +5,7 @@ Goal: give Python scripts the same deterministic path resolution as PHP bootstra
 without depending on environment variables.
 
 Primary outputs:
-- APP_ROOT, APP_LIB
+- APP_ROOT, APP_LIB, APP_SOURCE_SCRIPTS
 - PRIVATE_ROOT, PRIVATE_SCRIPTS
 
 Strategy:
@@ -138,10 +138,12 @@ def get_paths(start: Optional[PathLike] = None) -> Dict[str, str]:
         return file_paths
 
     private_scripts = private_root / "scripts"
+    app_source_scripts = app_root / "src" / "scripts"
 
     return {
         "APP_ROOT": _norm(app_root),
         "APP_LIB": _norm(app_lib),
+        "APP_SOURCE_SCRIPTS": _norm(app_source_scripts),
         "PRIVATE_ROOT": _norm(private_root),
         "PRIVATE_SCRIPTS": _norm(private_scripts),
     }

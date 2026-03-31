@@ -148,6 +148,53 @@ if (!function_exists('path_is_within')) {
   }
 }
 
+if (!function_exists('bootstrap_read_env_value')) {
+  function bootstrap_read_env_value($path, $keys) {
+    if (!is_array($keys)) {
+      $keys = [$keys];
+    }
+
+    foreach ($keys as $key) {
+      $value = getenv($key);
+      if ($value !== false && trim((string)$value) !== '') {
+        return trim((string)$value);
+      }
+      if (isset($_ENV[$key]) && trim((string)$_ENV[$key]) !== '') {
+        return trim((string)$_ENV[$key]);
+      }
+      if (isset($_SERVER[$key]) && trim((string)$_SERVER[$key]) !== '') {
+        return trim((string)$_SERVER[$key]);
+      }
+    }
+
+    if (!is_file($path) || !is_readable($path)) {
+      return '';
+    }
+
+    $lines = @file($path, FILE_IGNORE_NEW_LINES);
+    if (!is_array($lines)) {
+      return '';
+    }
+
+    foreach ($lines as $line) {
+      $line = trim((string)$line);
+      if ($line === '' || strpos($line, '#') === 0 || strpos($line, '=') === false) {
+        continue;
+      }
+      list($envKey, $envValue) = explode('=', $line, 2);
+      $envKey = trim((string)$envKey);
+      if (in_array($envKey, $keys, true)) {
+        $envValue = trim((string)$envValue);
+        if ($envValue !== '') {
+          return $envValue;
+        }
+      }
+    }
+
+    return '';
+  }
+}
+
 // ------------------------------------------------------------
 // PRIVATE_ROOT (filesystem-only, writable, never web-served)
 // Priority:
@@ -209,9 +256,15 @@ if (!file_exists($privateHtaccess)) {
   @file_put_contents($privateHtaccess, $denyRules, LOCK_EX);
 }
 
-// PRIVATE_SCRIPTS
+// PRIVATE_SCRIPTS: wrapper scripts live under PRIVATE_ROOT/scripts (canonical location)
 if (!defined('PRIVATE_SCRIPTS')) {
-  define('PRIVATE_SCRIPTS', PRIVATE_ROOT . '/scripts');
+  define('PRIVATE_SCRIPTS', rtrim(PRIVATE_ROOT, '/\\') . '/scripts');
+}
+
+// APP_SOURCE_SCRIPTS (version-controlled source scripts under app root)
+if (!defined('APP_SOURCE_SCRIPTS')) {
+  $sourceScripts = APP_ROOT . '/src/scripts';
+  define('APP_SOURCE_SCRIPTS', rtrim(trim((string)$sourceScripts), '/\\'));
 }
 
 // ---- Rate limiting ----
@@ -253,6 +306,7 @@ $GLOBALS['APP_BOOTSTRAP_CONFIG'] = [
   'ENTRY_URL'    => ENTRY_URL,
   'APP_ROOT'     => APP_ROOT,
   'APP_LIB'      => APP_LIB,
+  'APP_SOURCE_SCRIPTS' => APP_SOURCE_SCRIPTS,
   'APP_SERVICE_NAME' => APP_SERVICE_NAME,
   'APP_ENV_FILE' => APP_ENV_FILE,
   'API_KEYS_FILE' => API_KEYS_FILE,
@@ -270,6 +324,7 @@ $GLOBALS['APP_BOOTSTRAP_CONFIG'] = [
     $paths = [
       'APP_ROOT' => APP_ROOT,
       'APP_LIB' => APP_LIB,
+      'APP_SOURCE_SCRIPTS' => APP_SOURCE_SCRIPTS,
       'PRIVATE_ROOT' => PRIVATE_ROOT,
       'PRIVATE_SCRIPTS' => PRIVATE_SCRIPTS,
     ];

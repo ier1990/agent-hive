@@ -4,10 +4,12 @@ ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
 
+require_once dirname(__DIR__) . '/lib/bootstrap.php';
+
 // Root browsing base and known scripts directory used by admin_Scripts.php
-$BASE_ROOT    = '/web';
-$SCRIPTS_ROOT = '/web/private/scripts';
-$DB_PATH      = '/web/private/db/scripts_knowledge.db';
+$BASE_ROOT    = rtrim(dirname((string)APP_ROOT), '/\\');
+$SCRIPTS_ROOT = defined('PRIVATE_SCRIPTS') ? (string)PRIVATE_SCRIPTS : '/web/private/scripts';
+$DB_PATH      = rtrim((string)PRIVATE_ROOT, '/\\') . '/db/scripts_knowledge.db';
 
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 function json_out($data, $status=200){

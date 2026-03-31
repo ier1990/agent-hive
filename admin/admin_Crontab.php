@@ -1,6 +1,6 @@
 <?php
 // /web/html/admin/admin_Crontab.php
-// Shows cron candidates under /web/private/scripts and manages dispatcher schedules.
+// Shows cron candidates under the configured PRIVATE_SCRIPTS directory and manages dispatcher schedules.
 
 ini_set('display_errors', '1');
 ini_set('display_startup_errors', '1');
@@ -192,6 +192,28 @@ function cron_guess_preset(string $schedule): string
 	return isset($known[$s]) ? $s : 'custom';
 }
 
+function cron_map_legacy_script_path(string $scriptPath, string $scriptsRoot): string
+{
+	$path = trim($scriptPath);
+	if ($path === '') return '';
+
+	$root = rtrim(str_replace('\\', '/', $scriptsRoot), '/');
+	$legacy = '/web/private/scripts';
+
+	if ($root === '' || $root === $legacy) return '';
+	if (strpos($path, $legacy . '/') !== 0) return '';
+
+	$suffix = substr($path, strlen($legacy));
+	if ($suffix === false || $suffix === '') return '';
+
+	$candidate = $root . $suffix;
+	if (!is_file($candidate)) return '';
+
+	$rp = realpath($candidate);
+	if ($rp === false) return '';
+	return (string)$rp;
+}
+
 function list_cron_candidates(string $rootDir): array
 {
 	$out = [];
@@ -243,7 +265,7 @@ function list_cron_candidates(string $rootDir): array
 }
 
 $privateRoot = defined('PRIVATE_ROOT') ? (string)PRIVATE_ROOT : '/web/private';
-$scriptsRoot = rtrim($privateRoot, "/\\") . '/scripts';
+$scriptsRoot = defined('PRIVATE_SCRIPTS') ? (string)PRIVATE_SCRIPTS : (rtrim($privateRoot, "/\\") . '/scripts');
 $items = list_cron_candidates($scriptsRoot);
 
 $viewRunAs = (string)($_GET['run_as'] ?? ($_POST['run_as'] ?? 'all'));
@@ -294,6 +316,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 					$ts = time();
 					foreach ($tasks as $task) {
 						$scriptPath = (string)($task['script_path'] ?? '');
+						if (strpos($scriptPath, '/web/private/scripts/') === 0) {
+							$scriptPath = $scriptsRoot . substr($scriptPath, strlen('/web/private/scripts'));
+						}
 						$schedule = (string)($task['schedule'] ?? '');
 						$argsText = (string)($task['args_text'] ?? '');
 						$enabled = (int)($task['enabled'] ?? 0);
@@ -394,6 +419,41 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 				$messages[] = 'Saved schedule for ' . $rp;
 			}
 		}
+	}
+}
+
+if ($db) {
+	try {
+		$rows = $db->query('SELECT id, script_path FROM cron_tasks')->fetchAll(PDO::FETCH_ASSOC);
+		$remapped = 0;
+		foreach ($rows as $row) {
+			$taskId = (int)($row['id'] ?? 0);
+			$oldPath = (string)($row['script_path'] ?? '');
+			if ($taskId <= 0 || $oldPath === '') continue;
+
+			if (is_file($oldPath)) {
+				$clear = $db->prepare('UPDATE cron_tasks SET last_status=CASE WHEN last_status = "missing" THEN NULL ELSE last_status END WHERE id=:id');
+				$clear->execute([':id' => $taskId]);
+				continue;
+			}
+
+			$newPath = cron_map_legacy_script_path($oldPath, $scriptsRoot);
+			if ($newPath === '') continue;
+
+			$upd = $db->prepare('UPDATE cron_tasks SET script_path=:p, last_status=CASE WHEN last_status = "missing" THEN NULL ELSE last_status END, updated_at=:u WHERE id=:id');
+			$upd->execute([
+				':p' => $newPath,
+				':u' => time(),
+				':id' => $taskId,
+			]);
+			$remapped++;
+		}
+
+		if ($remapped > 0) {
+			$messages[] = 'Auto-remapped ' . $remapped . ' scheduled task path(s) to ' . $scriptsRoot;
+		}
+	} catch (Throwable $t) {
+		$errors[] = 'Path remap check failed: ' . $t->getMessage();
 	}
 }
 
@@ -732,7 +792,7 @@ if ($viewRunAs !== 'all') {
 	<div class="box">
 		<h2 style="margin:0 0 6px 0; font-size:15px;">Note</h2>
 		<div class="muted small">
-			This page is the “inventory” for the canonical scripts location (<code>/web/private/scripts</code>) and manages schedules for the every-minute dispatcher.
+			This page is the “inventory” for the configured scripts location (<code><?php echo e($scriptsRoot); ?></code>) and manages schedules for the every-minute dispatcher.
 		</div>
 	</div>
 </body>

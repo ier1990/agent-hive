@@ -7,17 +7,50 @@ set -euo pipefail
 #
 # This script creates wrapper scripts in the private directory that call
 # the original scripts in the source directory.
-# SRC is /web/html/src/scripts
-# DST is /web/private/scripts (wrappers only)
+# SRC defaults to APP_SOURCE_SCRIPTS from bootstrap paths, then /web/html/src/scripts
+# DST defaults to PRIVATE_ROOT/scripts unless APP_PRIVATE_SCRIPTS overrides it
 
-SRC="/web/html/src/scripts"
-DST="/web/private/scripts"
+PRIVATE_ROOT="${APP_PRIVATE_ROOT:-/web/private}"
+ENV_FILE="$PRIVATE_ROOT/.env"
+PATHS_FILE="$PRIVATE_ROOT/bootstrap_paths.json"
+
+# Canonical source/wrapper locations come from bootstrap paths when available.
+SRC=""
+DST=""
+if [[ -f "$PATHS_FILE" ]]; then
+  SRC_FROM_PATHS="$(sed -n 's/.*"APP_SOURCE_SCRIPTS"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PATHS_FILE" | head -n1)"
+  DST_FROM_PATHS="$(sed -n 's/.*"PRIVATE_SCRIPTS"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PATHS_FILE" | head -n1)"
+  [[ -n "$SRC_FROM_PATHS" ]] && SRC="$SRC_FROM_PATHS"
+  [[ -n "$DST_FROM_PATHS" ]] && DST="$DST_FROM_PATHS"
+fi
+
+# Fallbacks for first-run systems before bootstrap_paths.json exists.
+SRC="${SRC:-/web/html/src/scripts}"
+DST="${DST:-$PRIVATE_ROOT/scripts}"
 BOOTSTRAP_SRC="/web/html/lib/bootstrap.py"
-BOOTSTRAP_DST_DIR="/web/private/lib"
+BOOTSTRAP_DST_DIR="$PRIVATE_ROOT/lib"
 BOOTSTRAP_DST="$BOOTSTRAP_DST_DIR/bootstrap.py"
 OWNER="samekhi:www-data"
 
-mkdir -p "$SRC" 
+# Source scripts must already exist; do not silently create empty source trees.
+if [[ ! -d "$SRC" ]]; then
+  for candidate in \
+    "/web/html/src/scripts" \
+    "/web/iernc.com/public_html/src/scripts"
+  do
+    if [[ -d "$candidate" ]]; then
+      SRC="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ ! -d "$SRC" ]]; then
+  echo "ERROR: source scripts directory not found: $SRC" >&2
+  echo "Hint: ensure bootstrap_paths.json exists or deploy scripts under APP_ROOT/src/scripts" >&2
+  exit 1
+fi
+
 mkdir -p "$DST"
 
 # Public-facing source trees should not have executable bits set.
