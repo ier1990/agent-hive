@@ -7,12 +7,13 @@
 
 ---
 
-AgentHive is a self-hosted ops memory + AI backend: job queues, admin tools, notes/search, and API endpoints.
+AgentHive is a self-hosted ops memory + AI backend: job queues, admin tools, notes/search, agent runtime tools, and API endpoints.
 Designed to be the first platform installed on every server — private by default, with optional public APIs.
 
 ## What you can do with it
 - **Analyze and modernize codebases** with AI-powered CodeWalker (security audits, test strategies, documentation, refactoring)
 - Scan and understand legacy projects (older PHP, Python, shell scripts)
+- Run an interactive AI engineering shell with local tools, durable memory, and admin-managed dynamic tools
 - Run queued AI jobs (workers, logs, retries)
 - Manage shared AI connections (OpenAI / Anthropic / OpenRouter / Ollama / LM Studio)
 - Store and search operational notes and history
@@ -119,7 +120,14 @@ with:
 - **Notes** web app at `/admin/notes/` (SQLite-backed, includes a small “Jobs” health view)
 - **Chat routing** at `/v1/chat/` (autoselector) and `/v1/chat/completions` (OpenAI-compatible shim)
 - **Admin tools** under `/admin/` (protected with a “bootstrap token” flow to avoid fresh-install lockouts)
+- **AI Agent Shell** under `/admin/AI/`:
+  - split Python agent modules with file-backed boot prompt
+  - shared AI backend resolution from PHP settings
+  - slash-command shell (`/help`, `/status`, `/models`, `/search`, `/memory`, `/tools`)
+  - dynamic approved tool bridge into `/web/private/db/agent_tools.db`
+  - optional durable memory store in `/web/private/db/memory/agent_ai_memory.db`
 - **CodeWalker** — AI-powered codebase analysis and modernization tool
+- **MotherQue admin area** moved to `/admin/AI_MotherQue/`
 - **AI Story** collaborative narrative engine:
   - Admin UI: `/admin/admin_AI_Story.php`
   - API routes: `/v1/story/create`, `/v1/story/turn`, `/v1/story/list`, `/v1/story/relay`
@@ -174,6 +182,59 @@ Edit settings at `/admin/codewalker.php?view=settings` or via the settings datab
 
 **Cost Efficiency:**
 At ~$0.24 per 250 files (using efficient models), CodeWalker provides comprehensive codebase intelligence at scale.
+
+### AI Agent Shell
+
+The new AI shell is a local-first engineering agent that can use built-in tools, durable memory, and approved admin-managed tools.
+
+**Key Features:**
+- **Boot prompt file**: behavior is driven by `admin/AI/agent_boot.md`
+- **Split runtime modules**: `agent.py`, `agent_runtime.py`, `agent_config.py`, `agent_shell.py`, `agent_common.py`
+- **Shared AI config**: follows the same active backend/model chosen in `/admin/admin_AI_Setup.php` unless overridden
+- **Runtime profile**:
+  - template: `admin/AI/default_agent.json`
+  - private override: `/web/private/agent.json`
+- **Tool settings**:
+  - `/web/private/agent_tools.json`
+  - includes search, DB-backed agent tools, and durable memory settings
+- **Durable memory**:
+  - `memory_search` and `memory_write`
+  - SQLite DB at `/web/private/db/memory/agent_ai_memory.db`
+  - optional startup preload of recent entries
+- **Dynamic tool bridge**:
+  - reads approved tools from `/web/private/db/agent_tools.db`
+  - supports `php`, `python`, and `bash`
+  - exposes `agent_tool_list` and `agent_tool_run`
+- **Interactive shell**:
+  - styled TTY banner
+  - slash commands for backend status, search status, memory status, approved tool listing, and manual startup greeting
+  - optional startup greeting warmup to load local models before normal tool-loop runs
+
+**Admin Pages:**
+- `/admin/AI/` — landing page for the agent area
+- `/admin/admin_AI_Memory.php` — durable memory manager and memory runtime settings
+
+**REPL examples:**
+```bash
+python3 /web/html/admin/AI/agent.py
+
+# inside the shell
+/status
+/tools list
+/mem list
+```
+
+![AgentHive AI Shell](agent_shell.png)
+
+### MotherQue
+
+MotherQue assets now live under `/admin/AI_MotherQue/`.
+
+**Current layout:**
+- `admin/AI_MotherQue/index.php`
+- `admin/AI_MotherQue/README.md`
+- `admin/AI_MotherQue/scripts/`
+- `admin/AI_MotherQue/codewalker.png`
 
 ### AI Story quick notes
 
@@ -309,6 +370,8 @@ The git ignore policy is set up so you don't accidentally commit private data.
 	
 - `admin/`
 	- Admin tools (protected)
+	- `AI/` split Python agent shell + prompt/config docs
+	- `AI_MotherQue/` queue UI and scripts
 
 ---
 

@@ -1,0 +1,18 @@
+{
+  "name": "AgentHive Default Agent",
+  "provider": "",
+  "backend": "",
+  "base_url": "",
+  "api_key": "",
+  "model": "",
+  "timeout_seconds": 120,
+  "notes_db": "/web/private/db/memory/human_notes.db",
+  "code_root": "/web/html",
+  "boot_prompt_path": "/web/html/admin/AI/agent_boot.md",
+  "tool_settings_path": "/web/private/agent_tools.json",
+  "max_steps": 6,
+  "temperature": 0.2,
+  "debug": false,
+  "startup_greeting_enabled": true,
+  "startup_greeting_prompt": "Say a short greeting and introduce yourself in 2 short sentences."
+}
