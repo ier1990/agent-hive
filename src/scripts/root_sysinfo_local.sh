@@ -4,6 +4,7 @@ set -euo pipefail
 API="${API:-${SYSINFO_API_URL:-http://127.0.0.1/v1/inbox/}}"
 DB="${DB:-sysinfo_new}"
 SERVICE="${SERVICE:-daily_sysinfo}"
+SYSINFO_DEBUG="${SYSINFO_DEBUG:-0}"
 
 # Load optional defaults from /web/private/.env when not explicitly set
 if [[ -f /web/private/.env ]]; then
@@ -44,6 +45,11 @@ API_KEY_HEADER=()
 if [[ -z "${IER_API_KEY:-}" ]]; then
   echo "WARN: IER_API_KEY not set; guest inbox mode may reject table '${SERVICE}' (403)." >&2
 fi
+
+debug_enabled=0
+case "${SYSINFO_DEBUG}" in
+  1|true|TRUE|yes|YES|on|ON) debug_enabled=1 ;;
+esac
 
 # Optional: auto-install a static jq if missing (set ALLOW_AUTO_INSTALL_JQ=1)
 maybe_install_jq() {
@@ -138,7 +144,20 @@ if ! command -v jq >/dev/null 2>&1; then
   maybe_install_jq || { echo "ERROR: jq not found. Set ALLOW_AUTO_INSTALL_JQ=1 to auto-install, or install manually."; exit 1; }
 fi
 
+# Older curl versions do not support --retry-all-errors.
+CURL_RETRY_ARGS=( --retry 3 )
+if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+  CURL_RETRY_ARGS+=( --retry-all-errors )
+fi
+
 # Build JSON and send
+payload_file="$(mktemp)"
+resp_file="$(mktemp)"
+cleanup() {
+  rm -f "$payload_file" "$resp_file"
+}
+trap cleanup EXIT
+
 jq -nc \
   --arg service "$SERVICE" \
   --arg db "$DB" \
@@ -183,11 +202,55 @@ jq -nc \
       public_ip:$pubip
     }
   } + $d + $g + $o
-' | curl -fsS -X POST "$API" \
+' > "$payload_file"
+
+if (( debug_enabled )); then
+  echo "[sysinfo] endpoint=$API" >&2
+  echo "[sysinfo] service=$SERVICE db=$DB host=$HOST_ID" >&2
+  if [[ -n "${IER_API_KEY:-}" ]]; then
+    echo "[sysinfo] api_key=present" >&2
+  else
+    echo "[sysinfo] api_key=missing" >&2
+  fi
+fi
+
+http_code=""
+curl_rc=0
+if ! http_code="$(curl -sS -o "$resp_file" -w '%{http_code}' -X POST "$API" \
      -H 'Content-Type: application/json' \
      "${API_KEY_HEADER[@]}" \
      --connect-timeout 5 --max-time 20 \
-     --retry 3 --retry-all-errors \
-     --data-binary @- \
-  || echo "Failed to send sysinfo" >&2
+     "${CURL_RETRY_ARGS[@]}" \
+     --data-binary "@$payload_file")"; then
+  curl_rc=$?
+fi
+
+if (( curl_rc != 0 )); then
+  echo "ERROR: curl failed while sending sysinfo (exit=$curl_rc)" >&2
+  if (( debug_enabled )); then
+    echo "[sysinfo] payload_path=$payload_file response_path=$resp_file" >&2
+    if [[ -s "$resp_file" ]]; then
+      echo "[sysinfo] response_body:" >&2
+      cat "$resp_file" >&2
+    fi
+  fi
+  exit "$curl_rc"
+fi
+
+if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+  echo "ERROR: sysinfo POST failed with HTTP $http_code" >&2
+  if [[ -s "$resp_file" ]]; then
+    echo "Response body:" >&2
+    cat "$resp_file" >&2
+  fi
+  exit 22
+fi
+
+if (( debug_enabled )); then
+  echo "[sysinfo] success http=$http_code" >&2
+  if [[ -s "$resp_file" ]]; then
+    echo "[sysinfo] response_body:" >&2
+    cat "$resp_file" >&2
+  fi
+fi
 

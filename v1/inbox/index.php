@@ -55,7 +55,7 @@ if (function_exists('api_guard')) {
 }
 
 // ---------- Config ----------
-define('MAX_BODY_BYTES', 2_000_000); // ~2MB cap (tweak)
+define('MAX_BODY_BYTES', 2000000); // ~2MB cap (tweak)
 $start = microtime(true);
 $reqId = bin2hex(random_bytes(16));  // 32-char receipt
 $clientIp = function_exists('get_client_ip_trusted') ? get_client_ip_trusted() : ($_SERVER['REMOTE_ADDR'] ?? '');

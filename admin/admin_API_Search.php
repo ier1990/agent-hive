@@ -45,6 +45,53 @@ function search_cache_db_path() {
     return rtrim((string)PRIVATE_ROOT, '/\\') . '/db/memory/search_cache.db';
 }
 
+function codewalker_settings_db_path() {
+    return rtrim((string)PRIVATE_ROOT, '/\\') . '/db/codewalker_settings.db';
+}
+
+function load_search_api_base_from_codewalker_db() {
+    $path = codewalker_settings_db_path();
+    if (!is_file($path) || !is_readable($path)) return '';
+    try {
+        $db = new SQLite3($path);
+        $stmt = $db->prepare('SELECT value FROM settings WHERE key = :k LIMIT 1');
+        $stmt->bindValue(':k', 'search_api_base', SQLITE3_TEXT);
+        $res = $stmt->execute();
+        $row = $res ? $res->fetchArray(SQLITE3_ASSOC) : null;
+        $db->close();
+        if (!is_array($row) || !isset($row['value'])) return '';
+
+        $decoded = json_decode((string)$row['value'], true);
+        if (is_string($decoded)) return trim($decoded);
+        if (is_string($row['value'])) return trim((string)$row['value']);
+    } catch (Throwable $e) {
+        return '';
+    }
+    return '';
+}
+
+function save_search_api_base_to_codewalker_db($value) {
+    $path = codewalker_settings_db_path();
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    $v = trim((string)$value);
+    if ($v === '') return false;
+    try {
+        $db = new SQLite3($path);
+        $db->exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)');
+        $stmt = $db->prepare('INSERT INTO settings(key, value) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+        $stmt->bindValue(':k', 'search_api_base', SQLITE3_TEXT);
+        $stmt->bindValue(':v', json_encode($v), SQLITE3_TEXT);
+        $ok = $stmt->execute() !== false;
+        $db->close();
+        return $ok;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
 function load_search_api_base_from_notes_db() {
     $path = notes_db_path();
     if (!is_file($path) || !is_readable($path)) return '';
@@ -124,9 +171,11 @@ function fetch_recent_search_cache_rows($limit) {
 }
 
 $notesSearchApiBase = load_search_api_base_from_notes_db();
+$cwSearchApiBase = load_search_api_base_from_codewalker_db();
 $baseUrl = infer_base_url();
 $defaultSearxUrl = trim((string)(getenv('SEARX_URL') ?: ''));
-$defaultV1SearchUrl = normalize_v1_search_url($notesSearchApiBase, $baseUrl);
+$defaultConfiguredSearch = $cwSearchApiBase !== '' ? $cwSearchApiBase : $notesSearchApiBase;
+$defaultV1SearchUrl = normalize_v1_search_url($defaultConfiguredSearch, $baseUrl);
 
 $query = trim((string)($_POST['q'] ?? ($_GET['q'] ?? 'teijin seiki ar-60')));
 $searxUrl = trim((string)($_POST['searx_url'] ?? ($_GET['searx_url'] ?? $defaultSearxUrl)));
@@ -137,11 +186,22 @@ $testTarget = trim((string)($_POST['test_target'] ?? ''));
 $searxResult = null;
 $v1Result = null;
 $error = '';
+$flash = '';
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    $action = isset($_POST['action']) ? (string)$_POST['action'] : 'run_test';
     $csrf = isset($_POST['csrf_token']) ? (string)$_POST['csrf_token'] : '';
     if (!auth_csrf_ok($csrf)) {
         $error = 'Invalid CSRF token.';
+    } elseif ($action === 'save_search_base') {
+        $normalized = normalize_v1_search_url($v1SearchUrl, $baseUrl);
+        if (save_search_api_base_to_codewalker_db($normalized)) {
+            $flash = 'Saved search_api_base to CodeWalker settings.';
+            $cwSearchApiBase = $normalized;
+            $v1SearchUrl = $normalized;
+        } else {
+            $error = 'Failed to save search_api_base to CodeWalker settings DB.';
+        }
     } elseif ($query === '') {
         $error = 'Search query is required.';
     } else {
@@ -232,8 +292,17 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
                     <input type="text" name="api_key" value="<?php echo h($apiKey); ?>" placeholder="key with search scope">
                 </div>
             </div>
-            <div class="row"><button type="submit">Run Test</button></div>
+            <div class="row" style="display:flex;gap:10px;flex-wrap:wrap">
+                <button type="submit" name="action" value="run_test" style="width:auto">Run Test</button>
+                <button type="submit" name="action" value="save_search_base" style="width:auto;background:#22c55e;color:#052e16">Save /v1/search URL To CodeWalker</button>
+            </div>
         </form>
+        <?php if ($flash !== ''): ?>
+            <div class="row" style="color:#4ade80"><strong><?php echo h($flash); ?></strong></div>
+        <?php endif; ?>
+        <?php if ($cwSearchApiBase !== ''): ?>
+            <div class="row muted">Configured in CodeWalker settings (<code>search_api_base</code>): <code><?php echo h($cwSearchApiBase); ?></code></div>
+        <?php endif; ?>
         <?php if ($notesSearchApiBase !== ''): ?>
             <div class="row muted">Configured in Notes app_settings (<code>search.api.base</code>): <code><?php echo h($notesSearchApiBase); ?></code></div>
         <?php endif; ?>

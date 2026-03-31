@@ -33,6 +33,8 @@ const ENV_DEFAULTS = [
         'OPENAI_MODEL' => 'gpt-3.5-turbo',
         'LLM_BASE_URL' => 'http://127.0.0.1:1234/v1',
         'LLM_API_KEY' => '',
+        'SYSINFO_API_URL' => 'http://127.0.0.1/v1/inbox/',
+        'SYSINFO_API_KEY' => '',
         'IER_API_KEY' => '',
         'OLLAMA_HOST' => 'http://127.0.0.1:11434',
         'SEARX_URL' => '',
@@ -42,11 +44,7 @@ const ENV_DEFAULTS = [
 if ($action === 'check_env') {
         $results['env_check'] = checkEnvironment();
         $_SESSION['install_results'] = $results;
-        $step = 2;
-} elseif ($action === 'create_dirs') {
-        $results['dirs_created'] = createDirectories();
-        $_SESSION['install_results'] = $results;
-        $step = 3;
+    $step = 3;
 } elseif ($action === 'setup_env') {
         $results['env_saved'] = setupEnvFile($_POST);
         $_SESSION['install_results'] = $results;
@@ -69,6 +67,105 @@ function loadEnvFile($path = '/web/private/.env') {
                 }
         }
         return $out;
+}
+
+function installerGenerateApiKey() {
+    try {
+        return 'sk-' . bin2hex(random_bytes(20));
+    } catch (Throwable $e) {
+        if (function_exists('openssl_random_pseudo_bytes')) {
+            $bytes = openssl_random_pseudo_bytes(20);
+            if ($bytes !== false) {
+                return 'sk-' . bin2hex($bytes);
+            }
+        }
+        return 'sk-' . sha1(uniqid('', true) . mt_rand());
+    }
+}
+
+function installerReadApiKeys($path = '/web/private/api_keys.json') {
+    if (!is_file($path) || !is_readable($path)) return [];
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || $raw === '') return [];
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : [];
+}
+
+function installerWriteApiKeys(array $keys, $path = '/web/private/api_keys.json') {
+    $dir = dirname($path);
+    if (!is_dir($dir) && !@mkdir($dir, 0770, true)) {
+        return false;
+    }
+
+    $json = json_encode($keys, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($json)) return false;
+
+    $ok = @file_put_contents($path, $json . "\n", LOCK_EX) !== false;
+    if ($ok) {
+        @chmod($path, 0600);
+    }
+    return $ok;
+}
+
+function installerEnsureSysinfoApiKey(array &$config) {
+    $result = [
+        'ok' => false,
+        'path' => '/web/private/api_keys.json',
+        'key_created' => false,
+        'key_updated' => false,
+        'error' => null,
+    ];
+
+    $sysinfoKey = trim((string)($config['SYSINFO_API_KEY'] ?? ''));
+    $ierKey = trim((string)($config['IER_API_KEY'] ?? ''));
+
+    if ($sysinfoKey === '') {
+        if ($ierKey !== '') {
+            $sysinfoKey = $ierKey;
+        } else {
+            $sysinfoKey = installerGenerateApiKey();
+            $result['key_created'] = true;
+        }
+        $config['SYSINFO_API_KEY'] = $sysinfoKey;
+    }
+
+    if (trim((string)($config['IER_API_KEY'] ?? '')) === '') {
+        $config['IER_API_KEY'] = $sysinfoKey;
+    }
+
+    $scopes = ['inbox', 'receiving', 'incoming', 'health', 'ping'];
+    $keys = installerReadApiKeys($result['path']);
+    $entry = $keys[$sysinfoKey] ?? [];
+
+    if (!is_array($entry)) {
+        $entry = [];
+    }
+
+    $existingScopes = [];
+    if (isset($entry['scopes']) && is_array($entry['scopes'])) {
+        $existingScopes = $entry['scopes'];
+    } elseif (array_values($entry) === $entry) {
+        $existingScopes = $entry;
+    }
+
+    $mergedScopes = array_values(array_unique(array_merge($existingScopes, $scopes)));
+    sort($mergedScopes);
+
+    $entry['scopes'] = $mergedScopes;
+    $entry['active'] = true;
+    if (!isset($entry['name'])) {
+        $entry['name'] = 'installer_sysinfo';
+    }
+    $keys[$sysinfoKey] = $entry;
+
+    if (!installerWriteApiKeys($keys, $result['path'])) {
+        $result['error'] = 'Failed to write ' . $result['path'] . ' (check permissions)';
+        return $result;
+    }
+
+    $result['ok'] = true;
+    $result['key_updated'] = true;
+    return $result;
 }
 
 // Save .env file from POST data
@@ -102,6 +199,31 @@ function setupEnvFile($postData) {
                         }
                 }
         }
+
+            // Ensure sysinfo sender has stable URL + key defaults for first-run installs.
+            if (trim((string)($config['SYSINFO_API_URL'] ?? '')) === '') {
+                $config['SYSINFO_API_URL'] = 'http://127.0.0.1/v1/inbox/';
+                $result['updated_keys'][] = 'SYSINFO_API_URL';
+            }
+
+            $beforeSysinfo = trim((string)($config['SYSINFO_API_KEY'] ?? ''));
+            $beforeIer = trim((string)($config['IER_API_KEY'] ?? ''));
+            $apiKeyProvision = installerEnsureSysinfoApiKey($config);
+            $result['api_key_provision'] = $apiKeyProvision;
+
+            if (trim((string)($config['SYSINFO_API_KEY'] ?? '')) !== $beforeSysinfo) {
+                $result['updated_keys'][] = 'SYSINFO_API_KEY';
+            }
+            if (trim((string)($config['IER_API_KEY'] ?? '')) !== $beforeIer) {
+                $result['updated_keys'][] = 'IER_API_KEY';
+            }
+
+            if (!$apiKeyProvision['ok']) {
+                $result['error'] = $apiKeyProvision['error'];
+                return $result;
+            }
+
+            $result['updated_keys'] = array_values(array_unique($result['updated_keys']));
         
         // Build new .env content - preserve structure when possible
         $lines = [];
@@ -201,17 +323,18 @@ function checkEnvironment() {
                 ];
         }
     
-        // Writable paths - check parent dirs
+        // Writable required directories
         foreach (REQUIRED_DIRS as $dir) {
-                $parent = dirname($dir);
-                $writable = is_dir($parent) && is_writable($parent);
+            $exists = is_dir($dir);
+            $writable = $exists && is_writable($dir);
+            $ok = $exists && $writable;
                 $checks['path_' . md5($dir)] = [
                         'label' => "Path: $dir",
-                        'required' => 'Parent writable',
-                        'actual' => $writable ? 'OK' : 'NOT WRITABLE',
-                        'ok' => $writable,
+                'required' => 'Exists + writable',
+                'actual' => $ok ? 'OK' : ($exists ? 'NOT WRITABLE' : 'MISSING'),
+                'ok' => $ok,
                         'critical' => true,
-                        'fix' => $writable ? null : "sudo mkdir -p $parent && sudo chown www-data:www-data $parent && sudo chmod 775 $parent"
+                'fix' => $ok ? null : "sudo mkdir -p $dir && sudo chown www-data:www-data $dir && sudo chmod 775 $dir"
                 ];
         }
     
@@ -353,6 +476,32 @@ function loadStoryTemplates() {
         
         return $result;
 }
+
+// Step 1 bootstrap: ensure required directories exist before environment checks.
+$bootstrapAllReady = false;
+$bootstrapAllExisted = false;
+if ($step === 1 && $action === null) {
+    $bootstrapResults = createDirectories();
+    $results['bootstrap_dirs'] = $bootstrapResults;
+    $_SESSION['install_results'] = $results;
+
+    $bootstrapAllReady = true;
+    $bootstrapAllExisted = true;
+    foreach ($bootstrapResults as $row) {
+        $ready = (($row['existed'] || $row['created']) && $row['writable']);
+        if (!$ready) {
+            $bootstrapAllReady = false;
+        }
+        if (!$row['existed']) {
+            $bootstrapAllExisted = false;
+        }
+    }
+
+    if ($bootstrapAllReady && $bootstrapAllExisted) {
+        header('Location: ?step=2');
+        exit;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html><head>
@@ -364,23 +513,70 @@ function loadStoryTemplates() {
 <h1 class="text-3xl mb-8">🚀 Admin Installer - Step <?= $step ?>/4</h1>
 
 <?php if ($step === 1): ?>
+    <h2 class="text-xl mb-6">📁 Required Directory Bootstrap</h2>
+    <p class="text-gray-400 mb-6">Checking and creating required runtime directories before environment checks.</p>
+
+    <?php
+    $bootstrapRows = isset($results['bootstrap_dirs']) && is_array($results['bootstrap_dirs']) ? $results['bootstrap_dirs'] : [];
+    $bootstrapOk = true;
+    foreach ($bootstrapRows as $row) {
+        if (!(($row['existed'] || $row['created']) && $row['writable'])) {
+            $bootstrapOk = false;
+            break;
+        }
+    }
+    ?>
+
+    <div class="space-y-2 mb-6">
+        <?php foreach ($bootstrapRows as $row): ?>
+            <div class="bg-gray-800 p-4 rounded flex items-center justify-between">
+                <div>
+                    <div class="font-bold font-mono text-sm"><?= $row['path'] ?></div>
+                    <div class="text-sm text-gray-400">
+                        <?= $row['existed'] ? 'Already existed' : ($row['created'] ? 'Created now' : 'Failed') ?>
+                        <?= $row['writable'] ? ' • Writable ✓' : ' • Not writable ✗' ?>
+                    </div>
+                    <?php if (!empty($row['error'])): ?>
+                        <div class="text-xs text-red-400 mt-1"><?= $row['error'] ?></div>
+                        <div class="text-xs text-yellow-400 mt-1 font-mono"><?= $row['fix'] ?></div>
+                    <?php endif; ?>
+                </div>
+                <div class="text-4xl">
+                    <?= (($row['existed'] || $row['created']) && $row['writable']) ? '✅' : '❌' ?>
+                </div>
+            </div>
+        <?php endforeach; ?>
+    </div>
+
+    <?php if ($bootstrapOk): ?>
+        <a href="?step=2" class="inline-block bg-green-600 hover:bg-green-700 px-6 py-3 rounded font-bold">
+            Continue to Environment Check →
+        </a>
+    <?php else: ?>
+        <div class="bg-red-900 border border-red-500 p-4 rounded">
+            <div class="font-bold">❌ Directory Setup Issues Found</div>
+            <p class="text-sm mt-2">Fix directory permission issues above, then reload this page.</p>
+        </div>
+    <?php endif; ?>
+
+<?php elseif ($step === 2): ?>
     <h2 class="text-xl mb-6">🔍 Environment Check</h2>
     <p class="text-gray-400 mb-6">Checking what normally breaks when installing...</p>
-  
-    <?php 
+
+    <?php
     $checks = checkEnvironment();
     $allOk = array_reduce($checks, function ($carry, $c) {
         return $carry && ($c['ok'] || !$c['critical']);
     }, true);
     ?>
-  
+
     <div class="space-y-2 mb-6">
         <?php foreach ($checks as $check): ?>
             <div class="bg-gray-800 p-4 rounded flex items-center justify-between">
                 <div>
                     <div class="font-bold"><?= $check['label'] ?></div>
                     <div class="text-sm text-gray-400">
-                        Required: <?= $check['required'] ?> | 
+                        Required: <?= $check['required'] ?> |
                         Actual: <span class="<?= $check['ok'] ? 'text-green-400' : 'text-red-400' ?>"><?= $check['actual'] ?></span>
                     </div>
                     <?php if (!$check['ok'] && isset($check['fix'])): ?>
@@ -393,7 +589,7 @@ function loadStoryTemplates() {
             </div>
         <?php endforeach; ?>
     </div>
-  
+
     <?php if ($allOk): ?>
         <form method="POST">
             <input type="hidden" name="action" value="check_env">
@@ -406,48 +602,6 @@ function loadStoryTemplates() {
             <div class="font-bold">❌ Critical Issues Found</div>
             <p class="text-sm mt-2">Fix the issues above before continuing. Use the provided commands if needed.</p>
         </div>
-    <?php endif; ?>
-
-<?php elseif ($step === 2): ?>
-    <h2 class="text-xl mb-6">📁 Create Required Directories</h2>
-  
-    <?php if (!empty($results['dirs_created'])): ?>
-        <div class="space-y-2 mb-6">
-            <?php foreach ($results['dirs_created'] as $result): ?>
-                <div class="bg-gray-800 p-4 rounded flex items-center justify-between">
-                    <div>
-                        <div class="font-mono text-sm"><?= $result['path'] ?></div>
-                        <div class="text-xs text-gray-400">
-                            <?= $result['existed'] ? 'Already existed' : ($result['created'] ? 'Created' : 'Failed') ?>
-                            <?= $result['writable'] ? ' • Writable ✓' : ' • Not writable ✗' ?>
-                        </div>
-                        <?php if ($result['error']): ?>
-                            <div class="text-xs text-red-400 mt-1"><?= $result['error'] ?></div>
-                            <div class="text-xs text-yellow-400 mt-1 font-mono"><?= $result['fix'] ?></div>
-                        <?php endif; ?>
-                    </div>
-                    <div class="text-2xl">
-                        <?= ($result['existed'] || $result['created']) && $result['writable'] ? '✅' : '❌' ?>
-                    </div>
-                </div>
-            <?php endforeach; ?>
-        </div>
-        <a href="?step=3" class="inline-block bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded font-bold">
-            Continue to Setup →
-        </a>
-    <?php else: ?>
-        <p class="text-gray-400 mb-6">The following directories will be created:</p>
-        <div class="bg-gray-800 p-4 rounded mb-6 space-y-1 font-mono text-sm">
-            <?php foreach (REQUIRED_DIRS as $dir): ?>
-                <div><?= $dir ?></div>
-            <?php endforeach; ?>
-        </div>
-        <form method="POST">
-            <input type="hidden" name="action" value="create_dirs">
-            <button type="submit" class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded font-bold">
-                📁 Create Directories
-            </button>
-        </form>
     <?php endif; ?>
 
 <?php elseif ($step === 3): ?>
@@ -525,7 +679,13 @@ function loadStoryTemplates() {
             <div class="space-y-3">
                 <div>
                     <label class="text-sm text-gray-300">IER_API_KEY</label>
-                    <input type="text" name="IER_API_KEY" value="<?= htmlspecialchars($envConfig['IER_API_KEY']) ?>" placeholder="Leave empty to skip" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1 font-mono text-sm">
+                    <input type="text" name="IER_API_KEY" value="<?= htmlspecialchars($envConfig['IER_API_KEY']) ?>" placeholder="Leave empty to auto-generate sysinfo key" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1 font-mono text-sm">
+                    <div class="text-xs text-gray-500 mt-1">If blank, installer generates one key, writes it to api_keys.json, and stores it in both SYSINFO_API_KEY and IER_API_KEY.</div>
+                </div>
+                <div>
+                    <label class="text-sm text-gray-300">SYSINFO_API_URL</label>
+                    <input type="text" name="SYSINFO_API_URL" value="<?= htmlspecialchars($envConfig['SYSINFO_API_URL']) ?>" placeholder="http://127.0.0.1/v1/inbox/" class="w-full bg-gray-700 text-white px-3 py-2 rounded mt-1 font-mono text-sm">
+                    <div class="text-xs text-gray-500 mt-1">Sysinfo sender endpoint used by /web/private/scripts/root_sysinfo_local.sh</div>
                 </div>
                 <div>
                     <label class="text-sm text-gray-300">OPENAI_API_KEY</label>
@@ -607,6 +767,22 @@ function loadStoryTemplates() {
                     <div>✗ Error: <?= $envResult['error'] ?></div>
                 <?php endif; ?>
             </div>
+            <?php if (!empty($envResult['api_key_provision'])):
+                $prov = $envResult['api_key_provision'];
+            ?>
+                <div class="text-xs mt-3 <?= !empty($prov['ok']) ? 'text-blue-200' : 'text-red-200' ?>">
+                    <?php if (!empty($prov['ok'])): ?>
+                        <div>✓ Sysinfo API key ensured in <span class="font-mono"><?= htmlspecialchars($prov['path']) ?></span></div>
+                        <?php if (!empty($prov['key_created'])): ?>
+                            <div>• Generated a new key for first-run sysinfo ingestion</div>
+                        <?php else: ?>
+                            <div>• Reused existing key and ensured required scopes</div>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <div>✗ API key provisioning error: <?= htmlspecialchars((string)$prov['error']) ?></div>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
         </div>
     <?php } ?>
     
@@ -820,7 +996,7 @@ function loadStoryTemplates() {
 <?php endif; ?>
 
 <div class="mt-6">
-    <?php if ($step > 1 && $step < 3): ?><a href="?step=<?= $step-1 ?>" class="text-blue-400">← Back</a><?php endif; ?>
+    <?php if ($step > 1 && $step < 4): ?><a href="?step=<?= $step-1 ?>" class="text-blue-400">← Back</a><?php endif; ?>
 </div>
 </div>
 </body></html>

@@ -602,8 +602,8 @@ function auth_require_admin(): void
 					// ignore
 				}
 
-				// Redirect to strip bootstrap token from URL (and keep the user on the auth page).
-				header('Location: /admin/admin_AUTH.php');
+				// Redirect to installer after bootstrap admin creation.
+				header('Location: /admin/admin_installer.php');
 				exit;
 			}
 

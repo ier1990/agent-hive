@@ -31,6 +31,7 @@ function cw_config_template(): array
         'log_tail_lines' => 1200,
         'backend' => 'ollama',
         'base_url' => 'http://127.0.0.1:11434',
+        'search_api_base' => 'http://127.0.0.1/v1/search/',
         'api_key' => null,
         'model' => 'gpt-oss:latest',
         'model_timeout_seconds' => 900,

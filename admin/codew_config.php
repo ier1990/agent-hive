@@ -246,6 +246,7 @@ $rows = [
     ['mode', 'cron|que'],
     ['backend', 'auto|lmstudio|ollama|openai_compat'],
     ['base_url', 'LLM base URL (Ollama: http://host:11434)'],
+    ['search_api_base', 'Search endpoint base URL used by workers (e.g. https://host/v1/search/)'],
     ['api_key', 'API key for auth-required providers (OpenRouter, Anthropic, OpenAI)'],
     ['model', 'Default model name'],
     ['model_timeout_seconds', 'LLM request timeout in seconds (e.g. 900 for 15 minutes)'],

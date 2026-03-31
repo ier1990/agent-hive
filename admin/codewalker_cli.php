@@ -1,8 +1,4 @@
-#!/usr/bin/env php
-<?php
-
-
-declare(strict_types=1);
+<?php declare(strict_types=1);
 
 // Load core bootstrap for env() and other helpers
 $bootstrap = __DIR__ . '/../lib/bootstrap.php';
