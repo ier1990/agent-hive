@@ -4,7 +4,7 @@ set -euo pipefail
 API="${API:-${SYSINFO_API_URL:-http://127.0.0.1/v1/inbox/}}"
 DB="${DB:-sysinfo_new}"
 SERVICE="${SERVICE:-daily_sysinfo}"
-SYSINFO_DEBUG="${SYSINFO_DEBUG:-0}"
+SYSINFO_DEBUG="${SYSINFO_DEBUG:-1}"
 
 # Load optional defaults from /web/private/.env when not explicitly set
 if [[ -f /web/private/.env ]]; then
