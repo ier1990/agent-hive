@@ -12,7 +12,7 @@ function defaultNavConfig(): array {
 		['type' => 'view', 'label' => 'AI Metadata', 'view' => 'ai'],
 		['type' => 'view', 'label' => 'Jobs', 'view' => 'jobs'],
 
-		['type' => 'view', 'label' => 'AI Setup', 'view' => 'ai_setup'],
+		['type' => 'view', 'label' => 'Notes Debug', 'view' => 'notes_debug'],
 
 		['type' => 'view', 'label' => 'DBs', 'view' => 'dbs'],
 
@@ -119,7 +119,7 @@ function renderNotesView(string $view, array $ctx): string {
 		'prompts' => 'prompts.php',
 		'ai' => 'ai.php',
 		'dbs' => 'dbs.php',
-		'ai_setup' => 'ai_setup.php',
+		'notes_debug' => 'notes_debug.php',
 		'bash' => 'bash.php',
 		'search_cache' => 'search_cache.php',
 		'jobs' => 'jobs.php',
@@ -385,26 +385,22 @@ function _aiSetupStatusRow(string $label, bool $ok, string $detail = ''): string
 function renderAiSetup(array &$errors, ?SQLite3 $notesDb): string {
 	$h = '';
 	$h .= '<div class="card" style="margin-bottom:14px;">';
-	$h .= '<h2 style="margin:0 0 10px 0;">AI Setup</h2>';
-	$h .= '<div class="muted" style="margin-bottom:10px;">This page is the quick setup/health hub for the other parts (DBs, directories, scripts).</div>';
+	$h .= '<h2 style="margin:0 0 10px 0;">Notes Debug</h2>';
+	$h .= '<div class="muted" style="margin-bottom:10px;">Debug/health view for Notes-related scripts, DBs, and AI connectivity. Settings are read-only here to avoid config drift.</div>';
 
 	$cfg = notesResolveConfig($notesDb, $errors);
 	$ollamaUrl = (string)($cfg[AI_OLLAMA_URL_KEY] ?? 'http://192.168.0.142:11434');
 	$model = (string)($cfg[AI_OLLAMA_MODEL_KEY] ?? 'gpt-oss:latest');
 	$searchApiBase = (string)($cfg[SEARCH_API_BASE_KEY] ?? 'http://192.168.0.142/v1/search?q=');
+	$privateScriptsDir = defined('PRIVATE_SCRIPTS') ? (string)PRIVATE_SCRIPTS : '/web/private/scripts';
+	$sourceScriptsDir = defined('APP_SOURCE_SCRIPTS') ? (string)APP_SOURCE_SCRIPTS : '/web/html/src/scripts';
 
-	$h .= '<h3 style="margin:14px 0 8px 0;">AI Settings</h3>';
-	$h .= '<div class="muted" style="margin-bottom:10px;">Set the Ollama URL/model and the Search API base here. Scripts and example commands below will use these values.</div>';
-	$h .= '<form method="post" style="margin-bottom:14px;">';
-	$h .= '<input type="hidden" name="action" value="ai_setup_save" />';
-	$h .= '<label>Ollama URL</label>';
-	$h .= '<input type="text" name="ollama_url" value="' . htmlspecialchars($ollamaUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" placeholder="http://192.168.0.142:11434" />';
-	$h .= '<label>Model</label>';
-	$h .= '<input type="text" name="ollama_model" value="' . htmlspecialchars($model, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" placeholder="gpt-oss:latest" />';
-	$h .= '<label>Search API Base</label>';
-	$h .= '<input type="text" name="search_api_base" value="' . htmlspecialchars($searchApiBase, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" placeholder="http://192.168.0.142/v1/search?q=" />';
-	$h .= '<button type="submit">Save Settings</button>';
-	$h .= '</form>';
+	$h .= '<h3 style="margin:14px 0 8px 0;">Resolved Settings (Read-only)</h3>';
+	$h .= '<div class="muted" style="margin-bottom:8px;">Source precedence: app_settings -&gt; /web/private/notes_default.json -&gt; built-in defaults.</div>';
+	$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
+		. htmlspecialchars("OLLAMA_URL=\"" . $ollamaUrl . "\"\nMODEL=\"" . $model . "\"\nSEARCH_API_BASE=\"" . $searchApiBase . "\"", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+		. '</pre>';
+	$h .= '<div class="muted" style="margin:10px 0 0 0;">Change primary AI/search settings in CodeWalker Config and API Search pages.</div>';
 
 	$h .= '<h3 style="margin:14px 0 8px 0;">Filesystem</h3>';
 	$h .= _aiSetupStatusRow('DB memory dir', is_dir(DB_MEMORY_DIR), DB_MEMORY_DIR);
@@ -461,24 +457,24 @@ function renderAiSetup(array &$errors, ?SQLite3 $notesDb): string {
 	$h .= '<h3 style="margin:14px 0 8px 0;">Scripts</h3>';
 		$h .= '<div class="muted" style="margin-bottom:8px;">Consolidated hourly pipeline (recommended):</div>';
 		$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
-			. htmlspecialchars('/web/private/scripts/root_process_bash_history.py', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+			. htmlspecialchars($privateScriptsDir . '/root_process_bash_history.py', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
 			. '</pre>';
 		$h .= '<div class="muted" style="margin:10px 0 8px 0;">Example cron (single entry):</div>';
 		$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
-			. htmlspecialchars("5 * * * * /usr/bin/python3 /web/private/scripts/root_process_bash_history.py >> /web/private/logs/process_bash_history.log 2>&1", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+			. htmlspecialchars("5 * * * * /usr/bin/python3 " . $privateScriptsDir . "/root_process_bash_history.py >> /web/private/logs/process_bash_history.log 2>&1", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
 			. '</pre>';
 
-	$classifyScript = '/web/html/admin/notes/scripts/classify_bash_commands.py';
+	$classifyScript = $sourceScriptsDir . '/classify_bash_commands.py';
 	$h .= '<div style="margin-top:14px;">';
 	$h .= '<div class="muted" style="margin-bottom:8px;">Bash command classification (commands → command_ai via Ollama HTTP):</div>';
 	$h .= _aiSetupStatusRow('classify_bash_commands.py present', is_file($classifyScript), $classifyScript);
-	$h .= '<div class="muted" style="margin:6px 0 8px 0;"><a href="/admin/notes/scripts/classify_bash_commands.md" style="color: var(--accent); text-decoration: none;">README: classify_bash_commands.md</a></div>';
+	$h .= '<div class="muted" style="margin:6px 0 8px 0;"><a href="/src/scripts/classify_bash_commands.md" style="color: var(--accent); text-decoration: none;">README: classify_bash_commands.md</a></div>';
 	$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
 		. htmlspecialchars($classifyScript, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
 		. '</pre>';
 	$h .= '<div class="muted" style="margin:10px 0 8px 0;">Example cron:</div>';
 	$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
-		. htmlspecialchars("15 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/classify_bash_commands.py >> /web/private/logs/classify_bash_commands.log 2>&1", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+		. htmlspecialchars("15 * * * * /usr/bin/python3 " . $classifyScript . " >> /web/private/logs/classify_bash_commands.log 2>&1", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
 		. '</pre>';
 	$h .= '<div class="muted" style="margin:10px 0 8px 0;">Common env vars:</div>';
 	$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
@@ -486,17 +482,17 @@ function renderAiSetup(array &$errors, ?SQLite3 $notesDb): string {
 		. '</pre>';
 	$h .= '</div>';
 
-	$queueScript = '/web/html/admin/notes/scripts/queue_bash_searches.py';
+	$queueScript = $sourceScriptsDir . '/queue_bash_searches.py';
 	$h .= '<div style="margin-top:14px;">';
 	$h .= '<div class="muted" style="margin-bottom:8px;">Queue/search known commands (command_ai.search_query → /v1/search):</div>';
 	$h .= _aiSetupStatusRow('queue_bash_searches.py present', is_file($queueScript), $queueScript);
-	$h .= '<div class="muted" style="margin:6px 0 8px 0;"><a href="/admin/notes/scripts/queue_bash_searches.md" style="color: var(--accent); text-decoration: none;">README: queue_bash_searches.md</a></div>';
+	$h .= '<div class="muted" style="margin:6px 0 8px 0;"><a href="/src/scripts/queue_bash_searches.md" style="color: var(--accent); text-decoration: none;">README: queue_bash_searches.md</a></div>';
 	$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
 		. htmlspecialchars($queueScript, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
 		. '</pre>';
 	$h .= '<div class="muted" style="margin:10px 0 8px 0;">Example cron:</div>';
 	$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
-		. htmlspecialchars("25 * * * * /usr/bin/python3 /web/html/admin/notes/scripts/queue_bash_searches.py >> /web/private/logs/queue_bash_searches.log 2>&1", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+		. htmlspecialchars("25 * * * * /usr/bin/python3 " . $queueScript . " >> /web/private/logs/queue_bash_searches.log 2>&1", ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
 		. '</pre>';
 	$h .= '<div class="muted" style="margin:10px 0 8px 0;">Common env vars:</div>';
 	$h .= '<pre style="white-space:pre-wrap; border-radius:12px; border:1px solid var(--border); padding:12px; background:#0e1520; margin:0;">'
@@ -504,7 +500,7 @@ function renderAiSetup(array &$errors, ?SQLite3 $notesDb): string {
 		. '</pre>';
 	$h .= '</div>';
 
-	$aiNotesScript = '/web/html/admin/notes/scripts/ai_notes.py';
+	$aiNotesScript = $sourceScriptsDir . '/ai_notes.py';
 	$h .= '<div style="margin-top:14px;">';
 	$h .= '<div class="muted" style="margin-bottom:8px;">AI metadata pass (notes → ai_note_meta via Ollama HTTP):</div>';
 	$h .= _aiSetupStatusRow('ai_notes.py present', is_file($aiNotesScript), $aiNotesScript);

@@ -21,13 +21,8 @@ if [[ -f /web/private/.env ]]; then
         fi
         ;;
       SYSINFO_API_KEY)
-        if [[ -z "${IER_API_KEY:-}" && -n "$v" ]]; then
-          IER_API_KEY="$v"
-        fi
-        ;;
-      IER_API_KEY)
-        if [[ -z "${IER_API_KEY:-}" && -n "$v" ]]; then
-          IER_API_KEY="$v"
+        if [[ -z "${SYSINFO_API_KEY:-}" && -n "$v" ]]; then
+          SYSINFO_API_KEY="$v"
         fi
         ;;
     esac
@@ -39,11 +34,11 @@ if [[ "${API}" =~ /v1/inbox$ ]]; then
   API="${API}/"
 fi
 
-# Optional auth (recommended): export IER_API_KEY="xxxx"
+# Optional auth (recommended): export SYSINFO_API_KEY="xxxx"
 API_KEY_HEADER=()
-[[ -n "${IER_API_KEY:-}" ]] && API_KEY_HEADER=( -H "X-API-Key: $IER_API_KEY" )
-if [[ -z "${IER_API_KEY:-}" ]]; then
-  echo "WARN: IER_API_KEY not set; guest inbox mode may reject table '${SERVICE}' (403)." >&2
+[[ -n "${SYSINFO_API_KEY:-}" ]] && API_KEY_HEADER=( -H "X-API-Key: $SYSINFO_API_KEY" )
+if [[ -z "${SYSINFO_API_KEY:-}" ]]; then
+  echo "WARN: SYSINFO_API_KEY not set; guest inbox mode may reject table '${SERVICE}' (403)." >&2
 fi
 
 debug_enabled=0

@@ -20,7 +20,18 @@ Designed to be the first platform installed on every server — private by defau
 - Expose safe endpoints for automation and agent-to-agent workflows
 
 ## Quick start
-> (Add your install steps here)
+
+For a fresh server, visit `http://your-server/admin/admin_installer.php` after deploying. The installer wizard will:
+1. Auto-create required `/web/private` subdirectories
+2. Check PHP environment and extensions
+3. Write `/web/private/.env` with sane defaults
+4. Auto-generate and provision `SYSINFO_API_KEY` and `IER_API_KEY` into `api_keys.json`
+
+After install, verify:
+```bash
+curl -s http://localhost/v1/health | jq
+curl -s http://localhost/v1/ping | jq
+```
 
 
 ## Guest inbox (safe-by-default)
@@ -117,7 +128,7 @@ with:
 ## What’s included today
 
 - **/v1 API** endpoints (JSON, key + scope auth, rate limited)
-- **Notes** web app at `/admin/notes/` (SQLite-backed, includes a small “Jobs” health view)
+- **Notes** web app at `/admin/notes/` (SQLite-backed, includes Jobs, Bash History, DB Browser, and **Notes Debug** health view at `?view=notes_debug`)
 - **Chat routing** at `/v1/chat/` (autoselector) and `/v1/chat/completions` (OpenAI-compatible shim)
 - **Admin tools** under `/admin/` (protected with a “bootstrap token” flow to avoid fresh-install lockouts)
 - **AI Agent Shell** under `/admin/AI/`:
@@ -252,7 +263,16 @@ MotherQue assets now live under `/admin/AI_MotherQue/`.
 
 ---
 
-It's designed to run on a normal Linux box with Apache + PHP and a writable private data directory (default: `/web/private`).
+## PHP compatibility
+
+Target floor is **PHP 7.3**. No 7.4+ or 8.x features are used:
+- No arrow functions, typed properties, `??=`, or numeric underscore literals (`1_000`)
+- No named arguments, `match`, `?->`, union types, or `str_contains`
+- Polyfills for 7.3 gaps live in `lib/bootstrap.php`
+
+---
+
+
 
 ---
 
@@ -293,12 +313,15 @@ SECURITY_MODE=lan
 EOF
 ```
 
-4) Create your API keys file (scopes are app-defined; common ones: `chat`, `tools`, `health`):
+4) Run the installer to provision API keys and finish setup:
+
+- Visit `http://your-server/admin/admin_installer.php`
+- Or manually create `/web/private/api_keys.json`:
 
 ```bash
 cat >/web/private/api_keys.json <<'EOF'
 {
-	"change-me": {"active": true, "scopes": ["chat","tools","health"]}
+	"change-me": {"active": true, "scopes": ["chat","tools","health","inbox"]}
 }
 EOF
 sudo chown www-data:www-data /web/private/api_keys.json
@@ -327,10 +350,12 @@ API routes call `api_guard()` / `api_guard_once()` which:
 Configured via `.env`:
 
 - `SECURITY_MODE=lan|public`
-	- `lan` (default): allows keyless access from RFC1918 + loopback unless you provide `ALLOW_IPS_WITHOUT_KEY`
-	- `public`: keys required for all requests
-- `ALLOW_IPS_WITHOUT_KEY` (comma-separated CIDRs/IPs)
+	- `lan` (default): allows keyless access from RFC1918 + loopback
+	- `public`: keys required for all requests — **use this for internet-facing servers**
+- `ALLOW_IPS_WITHOUT_KEY` (comma-separated CIDRs/IPs, only used in `lan` mode)
 - `REQUIRE_KEY_FOR_ALL=0|1` (only applies when `SECURITY_MODE=lan`)
+- `SYSINFO_API_KEY` — dedicated key used by `root_sysinfo_local.sh` sender; provisioned automatically by installer
+- `IER_API_KEY` — secondary key for inter-server calls; also provisioned automatically by installer
 
 ### Admin auth (non-bricking fresh installs)
 
@@ -339,8 +364,7 @@ Admin pages use `lib/auth/auth.php`.
 Design goal: a fresh install should not lock you out.
 
 - On first run, a one-time bootstrap token lives at `${PRIVATE_ROOT}/bootstrap_admin_token.txt`
-- You can “claim” admin from LAN or with `?bootstrap=<token>`
-- After an admin exists, normal session login applies
+- You can “claim” admin from LAN or with `?bootstrap=<token>`- After creating your first admin account, you are redirected to the installer to finish setup- After an admin exists, normal session login applies
 
 ---
 
@@ -362,16 +386,23 @@ The git ignore policy is set up so you don't accidentally commit private data.
 ## Repo structure (high level)
 
 - `lib/`
-	- `bootstrap.php` (paths, env loader, API guard)
+	- `bootstrap.php` (paths, env loader, API guard; defines `APP_SOURCE_SCRIPTS` and `PRIVATE_SCRIPTS` path constants)
 	- `ratelimit.php` (file+flock sliding-window limiter; stores under `${PRIVATE_ROOT}/ratelimit`)
 	- `auth/auth.php` (admin bootstrap-token auth)
 - `v1/`
-	- API endpoints and apps, generally using the “directory route” form: `v1/<route>/index.php`
-	
+	- API endpoints and apps, generally using the "directory route" form: `v1/<route>/index.php`
+- `src/scripts/`
+	- Version-controlled original scripts; deployed to `${PRIVATE_ROOT}/scripts/` as executable wrappers via `root_update_scripts.sh`
+	- **Source path is always `APP_ROOT/src/scripts` — not configurable per-server**
+	- **Wrapper path is always `PRIVATE_ROOT/scripts` — not configurable per-server**
 - `admin/`
 	- Admin tools (protected)
 	- `AI/` split Python agent shell + prompt/config docs
 	- `AI_MotherQue/` queue UI and scripts
+	- `admin_installer.php` — step-by-step setup wizard (auto-creates dirs, sets env, provisions API keys)
+	- `admin_AI_Setup.php` — primary AI provider/model configuration
+	- `codew_config.php` — CodeWalker settings including AI base URL and search endpoint
+	- `admin_API_Search.php` — search endpoint configuration (shared with Python workers via CodeWalker settings DB)
 
 ---
 

@@ -202,59 +202,6 @@ function notesHandlePost(?SQLite3 $db, array &$errors, array &$success): bool
 			handleDelete($db);
 		} elseif ($action === 'create') {
 			handleCreate($db);
-		} elseif ($action === 'ai_setup_save') {
-			$ollamaUrl = trim((string)($_POST['ollama_url'] ?? ''));
-			$model = trim((string)($_POST['ollama_model'] ?? ''));
-			$searchApiBase = trim((string)($_POST['search_api_base'] ?? ''));
-			if ($ollamaUrl === '') {
-				throw new Exception('Ollama URL is required');
-			}
-			if (!preg_match('#^https?://#i', $ollamaUrl)) {
-				throw new Exception('Ollama URL must start with http:// or https://');
-			}
-			if (strlen($ollamaUrl) > 220) {
-				throw new Exception('Ollama URL is too long');
-			}
-			if ($model === '') {
-				$model = 'gpt-oss:latest';
-			}
-			if (strlen($model) > 120) {
-				throw new Exception('Model name is too long');
-			}
-			if ($searchApiBase === '') {
-				$searchApiBase = 'http://192.168.0.142/admin/search?q=';
-			}
-			if (!preg_match('#^https?://#i', $searchApiBase)) {
-				throw new Exception('Search API Base must start with http:// or https://');
-			}
-			if (strlen($searchApiBase) > 260) {
-				throw new Exception('Search API Base is too long');
-			}
-			if (strpos($searchApiBase, '/admin/search') === false) {
-				throw new Exception('Search API Base must include /admin/search');
-			}
-			if (strpos($searchApiBase, '?q=') === false) {
-				throw new Exception('Search API Base must include ?q=');
-			}
-
-			if ($db !== null && function_exists('notesSetAppSetting')) {
-				notesSetAppSetting($db, AI_OLLAMA_URL_KEY, $ollamaUrl);
-				notesSetAppSetting($db, AI_OLLAMA_MODEL_KEY, $model);
-				notesSetAppSetting($db, SEARCH_API_BASE_KEY, $searchApiBase);
-			}
-
-			$cfgErrors = [];
-			notesSaveDefaultConfig([
-				AI_OLLAMA_URL_KEY => $ollamaUrl,
-				AI_OLLAMA_MODEL_KEY => $model,
-				SEARCH_API_BASE_KEY => $searchApiBase,
-			], $cfgErrors);
-			foreach ($cfgErrors as $ce) {
-				$errors[] = $ce;
-			}
-			if (empty($cfgErrors)) {
-				$success[] = 'Saved settings';
-			}
 		} elseif ($action === 'prompt_create' || $action === 'prompt_delete') {
 			$pdb = ensurePromptsDb();
 			if ($action === 'prompt_create') {

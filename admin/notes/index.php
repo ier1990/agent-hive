@@ -214,7 +214,7 @@ if ($view === 'ai') {
 	}
 } elseif ($view === 'dbs') {
 	$db_browser_html = renderDbBrowser($errors, is_string($dbName) ? $dbName : null, is_string($tableName) ? $tableName : null, $search);
-} elseif ($view === 'ai_setup') {
+} elseif ($view === 'notes_debug') {
 	$ai_setup_html = renderAiSetup($errors, $db);
 } else {
 	if ($db === null) {

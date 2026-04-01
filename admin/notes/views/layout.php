@@ -15,7 +15,7 @@ $navItems = is_array($navItems ?? null) ? $navItems : [];
 
 $pageTitle = 'Notes';
 if ($view === 'ai') { $pageTitle = 'AI Notes'; }
-elseif ($view === 'ai_setup') { $pageTitle = 'AI Setup'; }
+elseif ($view === 'notes_debug') { $pageTitle = 'Notes Debug'; }
 elseif ($view === 'dbs') { $pageTitle = 'DB Browser'; }
 elseif ($view === 'bash') { $pageTitle = 'Bash History'; }
 elseif ($view === 'search_cache') { $pageTitle = 'Search Cache'; }
@@ -148,7 +148,7 @@ elseif ($view === 'search_cache') { $pageTitle = 'Search Cache'; }
 			require __DIR__ . '/prompts_form.php';
 		} ?>
 
-		<?php if ($view !== 'ai' && $view !== 'bash' && $view !== 'search_cache' && $view !== 'ai_setup'): ?>
+		<?php if ($view !== 'ai' && $view !== 'bash' && $view !== 'search_cache' && $view !== 'notes_debug'): ?>
 			<?php require __DIR__ . '/note_form.php'; ?>
 		<?php endif; ?>
 

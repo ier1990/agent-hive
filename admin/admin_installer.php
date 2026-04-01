@@ -111,7 +111,8 @@ function installerEnsureSysinfoApiKey(array &$config) {
     $result = [
         'ok' => false,
         'path' => '/web/private/api_keys.json',
-        'key_created' => false,
+        'sysinfo_key_created' => false,
+        'ier_key_created' => false,
         'key_updated' => false,
         'error' => null,
     ];
@@ -120,43 +121,48 @@ function installerEnsureSysinfoApiKey(array &$config) {
     $ierKey = trim((string)($config['IER_API_KEY'] ?? ''));
 
     if ($sysinfoKey === '') {
-        if ($ierKey !== '') {
-            $sysinfoKey = $ierKey;
-        } else {
-            $sysinfoKey = installerGenerateApiKey();
-            $result['key_created'] = true;
-        }
+        $sysinfoKey = installerGenerateApiKey();
+        $result['sysinfo_key_created'] = true;
         $config['SYSINFO_API_KEY'] = $sysinfoKey;
     }
 
-    if (trim((string)($config['IER_API_KEY'] ?? '')) === '') {
-        $config['IER_API_KEY'] = $sysinfoKey;
+    if ($ierKey === '') {
+        $ierKey = installerGenerateApiKey();
+        $result['ier_key_created'] = true;
+        $config['IER_API_KEY'] = $ierKey;
     }
 
     $scopes = ['inbox', 'receiving', 'incoming', 'health', 'ping'];
     $keys = installerReadApiKeys($result['path']);
-    $entry = $keys[$sysinfoKey] ?? [];
 
-    if (!is_array($entry)) {
-        $entry = [];
+    $targetKeys = [
+        $sysinfoKey => 'installer_sysinfo',
+        $ierKey => 'installer_ier',
+    ];
+
+    foreach ($targetKeys as $keyValue => $defaultName) {
+        $entry = $keys[$keyValue] ?? [];
+        if (!is_array($entry)) {
+            $entry = [];
+        }
+
+        $existingScopes = [];
+        if (isset($entry['scopes']) && is_array($entry['scopes'])) {
+            $existingScopes = $entry['scopes'];
+        } elseif (array_values($entry) === $entry) {
+            $existingScopes = $entry;
+        }
+
+        $mergedScopes = array_values(array_unique(array_merge($existingScopes, $scopes)));
+        sort($mergedScopes);
+
+        $entry['scopes'] = $mergedScopes;
+        $entry['active'] = true;
+        if (!isset($entry['name']) || $entry['name'] === '') {
+            $entry['name'] = $defaultName;
+        }
+        $keys[$keyValue] = $entry;
     }
-
-    $existingScopes = [];
-    if (isset($entry['scopes']) && is_array($entry['scopes'])) {
-        $existingScopes = $entry['scopes'];
-    } elseif (array_values($entry) === $entry) {
-        $existingScopes = $entry;
-    }
-
-    $mergedScopes = array_values(array_unique(array_merge($existingScopes, $scopes)));
-    sort($mergedScopes);
-
-    $entry['scopes'] = $mergedScopes;
-    $entry['active'] = true;
-    if (!isset($entry['name'])) {
-        $entry['name'] = 'installer_sysinfo';
-    }
-    $keys[$sysinfoKey] = $entry;
 
     if (!installerWriteApiKeys($keys, $result['path'])) {
         $result['error'] = 'Failed to write ' . $result['path'] . ' (check permissions)';
