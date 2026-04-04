@@ -827,6 +827,7 @@ $fl = flashes();
   <title>Scripts Knowledge Base</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>.scroll-thin::-webkit-scrollbar{width:6px;} .scroll-thin::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px;}</style>
+  <link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body class="bg-gray-50 min-h-screen">
   <div class="bg-gradient-to-r from-sky-500 to-indigo-600 text-white py-5 mb-6">

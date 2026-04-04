@@ -336,6 +336,7 @@ if (isset($_GET['view'])) {
 			sel.addEventListener('change', function(){ switchBodyFormat(sel.value); });
 		});
 	</script>
+	<link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body>
 	<h1>API Test Console</h1>

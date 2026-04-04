@@ -617,6 +617,7 @@ $fl = flashes();
     .scroll-thin::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px;}
     .key-reveal{user-select:all;}
   </style>
+  <link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body class="bg-gray-50 min-h-screen">
 

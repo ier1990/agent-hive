@@ -242,6 +242,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 		.msg.bad { background: #fff4f4; border: 1px solid #ffd1d1; }
 		.row { display:flex; gap: 12px; flex-wrap: wrap; align-items:flex-start; }
 	</style>
+	<link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body>
 	<div class="row" style="justify-content:space-between;">

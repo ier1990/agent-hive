@@ -849,6 +849,7 @@ if ($action === 'class') {
     .md h1, .md h2, .md h3 { margin: 16px 0 8px; }
     .md p { margin: 10px 0; }
   </style>
+  <link rel="stylesheet" href="lib/admin_dark.css" />
 </head>
 <body>
   <div class="top">

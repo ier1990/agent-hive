@@ -168,6 +168,7 @@ $flashes = take_flashes();
         .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(0,0,0,0.08); }
     </style>
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https: data:;">
+    <link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body class="bg-gray-50 min-h-screen">
     <div class="gradient-bg text-white py-6 mb-8">
@@ -298,7 +299,6 @@ $flashes = take_flashes();
     </div>
 </body>
 </html>
-
 
 
 

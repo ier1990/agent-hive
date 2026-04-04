@@ -36,7 +36,7 @@ Apache `.htaccess` rewrites route URLs to PHP files. API endpoints live under `v
 
 - `lib/` — shared PHP libraries: bootstrap (paths, env, API guard), auth, db (PDO singleton + ULID), http (cURL), queue, rate limiting, schema builder
 - `v1/` — API endpoints: health, ping, inbox, chat, search, status, models, etc.
-- `admin/` — protected admin tools. `admin/index.php` auto-discovers `admin_*.php` files and renders them in an iframe nav. Also loads imported modules from `/web/private/admin_modules/`
+- `admin/` — protected admin tools. `admin/index.php` auto-discovers `admin_*.php` files and renders them in an iframe nav. Also loads imported modules from `/web/private/admin_modules/`. Prefer the established dark theme for admin tools unless a page is intentionally preserving another existing design.
 - `admin/notes/` — notes app with views in `admin/notes/views/` (registered via allowlist in `notes_core.php`)
 - `src/scripts/` — worker scripts (Python/Bash/PHP), version-controlled here, deployed to `/web/private/scripts/` via `/web/html/src/scripts/root_update_scripts.sh`
 

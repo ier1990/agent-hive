@@ -463,28 +463,37 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['do_auth_test'
         th { background-color: #f4f4f4; }
         .error { color: red; }
         .muted { color: #666; }
+        .panel { background:#111827; border:1px solid #334155; border-radius:8px; padding:12px; margin-bottom:14px; }
+        .flash-ok { background:rgba(22,163,74,0.14); border:1px solid rgba(34,197,94,0.35); color:#bbf7d0; padding:10px 12px; border-radius:8px; margin:10px 0; }
+        .flash-bad { background:rgba(220,38,38,0.14); border:1px solid rgba(248,113,113,0.35); color:#fecaca; padding:10px 12px; border-radius:8px; margin:10px 0; }
+        .ok { color:#86efac; }
+        .surface { white-space:pre-wrap; background:#020617; border:1px solid #334155; border-radius:8px; padding:10px; margin-top:10px; color:#dbeafe; }
+        .form-surface { margin-top:10px; padding:12px; border:1px solid #334155; border-radius:8px; background:#111827; }
+        .field { width:100%; padding:8px; background:#0f172a; color:#e5eefb; border:1px solid #334155; border-radius:8px; }
+        .btn-dark { padding:8px 12px; background:#1d4ed8; color:#eff6ff; border:1px solid #3b82f6; border-radius:8px; }
 
         details.tutor { margin-top: 18px; border: 1px solid #ddd; border-radius: 10px; background: #fafafa; }
         details.tutor > summary { cursor: pointer; padding: 10px 12px; font-weight: bold; }
         details.tutor pre { margin: 0; padding: 12px; white-space: pre-wrap; background: #fff; border-top: 1px solid #eee; border-radius: 0 0 10px 10px; }
     </style>
+    <link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body>
     <h1>.htaccess Password & API Rewrites</h1>
 
     <?php foreach ($messages as $m): ?>
-        <div style="background:#eef9f0; border:1px solid #cde9d3; padding:10px 12px; border-radius:8px; margin:10px 0;"><?php echo $m; ?></div>
+        <div class="flash-ok"><?php echo $m; ?></div>
     <?php endforeach; ?>
     <?php foreach ($errors as $m): ?>
-        <div style="background:#fff4f4; border:1px solid #ffd1d1; padding:10px 12px; border-radius:8px; margin:10px 0;"><?php echo $m; ?></div>
+        <div class="flash-bad"><?php echo $m; ?></div>
     <?php endforeach; ?>
 
     <h2>Admin Basic Auth (.htaccess + htpasswd)</h2>
-    <div style="background:#f7f7f7; border:1px solid #ddd; border-radius:8px; padding:12px; margin-bottom:14px;">
-        <div><strong>.htaccess:</strong> <code><?php echo html($htaccessPath); ?></code> <?php echo is_file($htaccessPath) ? '<span style="color:#0a7a30;">(exists)</span>' : '<span class="muted">(missing)</span>'; ?></div>
-        <div><strong>AuthUserFile:</strong> <code><?php echo html($htpasswdPath); ?></code> <?php echo is_file($htpasswdPath) ? '<span style="color:#0a7a30;">(exists)</span>' : '<span class="muted">(missing)</span>'; ?></div>
+    <div class="panel">
+        <div><strong>.htaccess:</strong> <code><?php echo html($htaccessPath); ?></code> <?php echo is_file($htaccessPath) ? '<span class="ok">(exists)</span>' : '<span class="muted">(missing)</span>'; ?></div>
+        <div><strong>AuthUserFile:</strong> <code><?php echo html($htpasswdPath); ?></code> <?php echo is_file($htpasswdPath) ? '<span class="ok">(exists)</span>' : '<span class="muted">(missing)</span>'; ?></div>
         <div><strong>Current .htaccess content:</strong></div>
-        <pre style="white-space:pre-wrap; background:#fff; border:1px solid #ddd; border-radius:8px; padding:10px; margin-top:10px;"><?php
+        <pre class="surface"><?php
             if (is_file($htaccessPath)) {
                 $content = @file_get_contents($htaccessPath);
                 echo html((string)$content);
@@ -496,34 +505,34 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['do_auth_test'
 
         <h3 style="margin:12px 0 6px 0;">Write default <code>/admin/.htaccess</code></h3>
         <div class="muted">Overwrites <code>/admin/.htaccess</code> with the recommended template (creates a timestamped backup if the file already exists).</div>
-        <pre style="white-space:pre-wrap; background:#fff; border:1px solid #ddd; border-radius:8px; padding:10px; margin-top:10px;"><?php echo html($recommendedHtaccess); ?></pre>
+        <pre class="surface"><?php echo html($recommendedHtaccess); ?></pre>
         <form method="post" style="margin-top:10px;" onsubmit="return confirm('Overwrite /admin/.htaccess with the template? A backup will be created.');">
             <input type="hidden" name="csrf_token" value="<?php echo html(csrf_token()); ?>" />
             <input type="hidden" name="action" value="write_admin_htaccess" />
-            <button type="submit" style="padding:8px 12px;">Write Template</button>
+            <button type="submit" class="btn-dark">Write Template</button>
         </form>
 
         <h3 style="margin:14px 0 6px 0;">Create / update Apache Basic Auth user</h3>
         <div class="muted">Adds or updates a user entry in <code><?php echo html($htpasswdPath); ?></code>. Passwords are never displayed back.</div>
-        <form method="post" style="margin-top:10px; padding:12px; border:1px solid #ddd; border-radius:8px; background:#fff;">
+        <form method="post" class="form-surface">
             <input type="hidden" name="csrf_token" value="<?php echo html(csrf_token()); ?>" />
             <input type="hidden" name="action" value="set_htpasswd_user" />
             <div style="display:flex; gap:10px; flex-wrap:wrap;">
                 <div style="flex:1; min-width:220px;">
                     <label><strong>Username</strong></label><br>
-                    <input type="text" name="username" value="" style="width:100%; padding:8px;" autocomplete="username" />
+                    <input type="text" name="username" value="" class="field" autocomplete="username" />
                 </div>
                 <div style="flex:1; min-width:220px;">
                     <label><strong>Password</strong> (min 10 chars)</label><br>
-                    <input type="password" name="password" value="" style="width:100%; padding:8px;" autocomplete="new-password" />
+                    <input type="password" name="password" value="" class="field" autocomplete="new-password" />
                 </div>
                 <div style="flex:1; min-width:220px;">
                     <label><strong>Repeat password</strong></label><br>
-                    <input type="password" name="password2" value="" style="width:100%; padding:8px;" autocomplete="new-password" />
+                    <input type="password" name="password2" value="" class="field" autocomplete="new-password" />
                 </div>
             </div>
             <div style="margin-top:10px;">
-                <button type="submit" style="padding:8px 12px;">Create/Update User</button>
+                <button type="submit" class="btn-dark">Create/Update User</button>
             </div>
         </form>
     </div>

@@ -77,6 +77,7 @@ if (!$IS_EMBED) {
                 display: block;
             }
         </style>
+        <link rel="stylesheet" href="lib/admin_dark.css">
     </head>
     <body class="h-screen bg-gray-100">
         <div class="flex h-full">
@@ -181,6 +182,7 @@ if (!$IS_EMBED) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Console</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body class="bg-gray-50 min-h-screen flex items-center justify-center">
     <div class="text-center">

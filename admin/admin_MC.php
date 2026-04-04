@@ -143,6 +143,7 @@ $IS_EMBED = in_array(strtolower($_GET['embed'] ?? ''), ['1','true','yes'], true)
     .scroll-thin::-webkit-scrollbar{width:6px;height:6px}
     .scroll-thin::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
   </style>
+  <link rel="stylesheet" href="lib/admin_dark.css">
   <script>
     const BASE_QS_EMBED = '<?php echo $IS_EMBED ? '?embed=1' : ''; ?>';
   </script>

@@ -22,6 +22,7 @@ When editing PHP, assume **PHP 7.3**:
 - `lib/`: shared PHP libraries (bootstrap, auth, db, http, rate limiting)
 - `v1/`: API endpoints and apps (generally `v1/<route>/index.php`)
 - `admin/`: admin tools (protected pages)
+  - Prefer the established dark theme for admin tools unless a page is intentionally following a different existing design
 - `src/`: version-controlled scripts and notes that get deployed to private runtime
 - `/web/private` (not in git, never web-served): SQLite DBs, logs, keys, caches, rate limit state
 

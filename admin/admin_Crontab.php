@@ -545,6 +545,7 @@ if ($viewRunAs !== 'all') {
 			document.body.removeChild(ta);
 		}
 	</script>
+	<link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body>
 	<div class="top">

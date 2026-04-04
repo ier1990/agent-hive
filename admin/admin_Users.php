@@ -176,6 +176,7 @@ try {
 		th, td { border-bottom: 1px solid #eee; padding: 8px 6px; text-align: left; vertical-align: top; }
 		th { font-size: 12px; color: #555; }
 	</style>
+	<link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body>
 	<div class="row" style="justify-content:space-between;">

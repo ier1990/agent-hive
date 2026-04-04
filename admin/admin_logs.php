@@ -77,13 +77,14 @@ function formatBytes($bytes, $precision = 2) {
         table { border-collapse: collapse; width: 100%; margin-top: 20px; }
         th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
         th { background-color: #4CAF50; color: white; }
-        tr:nth-child(even) { background-color: #f2f2f2; }
-        tr:hover { background-color: #ddd; }
+        tr:nth-child(even) { background-color: #0f172a; }
+        tr:hover { background-color: #172033; }
         a { color: #2196F3; text-decoration: none; margin-right: 10px; }
         a:hover { text-decoration: underline; }
         .actions { white-space: nowrap; }
         .path { color: #666; font-size: 0.9em; }
     </style>
+    <link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body>
     <h1>Log Files Viewer</h1>

@@ -302,6 +302,7 @@ function parseDisk($disk_string) {
         .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
         .progress-bar { transition: width 0.3s ease; }
     </style>
+    <link rel="stylesheet" href="lib/admin_dark.css">
 </head>
 <body class="bg-gray-50 min-h-screen">
     <div class="gradient-bg text-white py-6 mb-8">
