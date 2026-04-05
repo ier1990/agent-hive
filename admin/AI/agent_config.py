@@ -5,7 +5,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from agent_common import AGENT_BOOT_PATH, AGENT_DB_PATH, AGENT_MEMORY_DB_PATH, AGENT_TOOL_SETTINGS_PATH, AI_SETTINGS_DB_PATH, APP_ROOT, DEFAULT_AGENT_CONFIG_PATH, DEFAULT_NOTES_DB, PRIVATE_AGENT_CONFIG_PATH, PRIVATE_ENV_PATH
 
@@ -51,6 +51,19 @@ def env_value(key: str, env_file: Dict[str, str], default: str = "") -> str:
     value = env_file.get(key)
     if value is not None and value != "":
         return value
+    return default
+
+
+def bool_value(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
     return default
 
 
@@ -227,10 +240,15 @@ def load_tool_settings() -> Dict[str, Any]:
 def default_agent_config() -> Dict[str, Any]:
     return {
         "name": "AgentHive Default Agent",
+        "profile_name": "default",
+        "task_name": "",
+        "description": "",
+        "mode": "shell",
         "provider": "",
         "backend": "",
         "base_url": "",
         "api_key": "",
+        "api_key_env": "",
         "model": "",
         "timeout_seconds": 120,
         "notes_db": str(DEFAULT_NOTES_DB),
@@ -238,8 +256,19 @@ def default_agent_config() -> Dict[str, Any]:
         "boot_prompt_path": str(AGENT_BOOT_PATH),
         "tool_settings_path": str(AGENT_TOOL_SETTINGS_PATH),
         "max_steps": 6,
+        "step_budget": 6,
         "temperature": 0.2,
         "debug": False,
+        "interactive": True,
+        "output_mode": "plain",
+        "plain_output": True,
+        "write_report": False,
+        "report_type": "plain",
+        "report_target": "",
+        "memory_enabled": True,
+        "allowed_tools": [],
+        "default_query": "",
+        "task_prompt": "",
     }
 
 
@@ -272,11 +301,11 @@ def load_private_agent_config() -> Dict[str, Any]:
         return {}
     return load_json_file(PRIVATE_AGENT_CONFIG_PATH)
 
-
-def load_agent_profile() -> Dict[str, Any]:
+def load_agent_profile(config_path_text: str = "") -> Dict[str, Any]:
     defaults = load_default_agent_template()
     private = load_private_agent_config()
     php = resolve_shared_ai_settings()
+    env_file = load_private_env()
 
     out = dict(defaults)
     out["provider"] = str(php.get("provider", "") or out.get("provider", ""))
@@ -289,13 +318,49 @@ def load_agent_profile() -> Dict[str, Any]:
     if private:
         out = merge_agent_config(out, private)
 
+    if str(config_path_text or "").strip() != "":
+        out = merge_agent_config(out, load_json_file(Path(str(config_path_text))))
+
+    api_key_env = str(out.get("api_key_env", "") or "").strip()
+    if api_key_env != "":
+        resolved_api_key = env_value(api_key_env, env_file, "")
+        if resolved_api_key != "":
+            out["api_key"] = resolved_api_key
+
     out["notes_db"] = str(out.get("notes_db", "") or DEFAULT_NOTES_DB)
     out["code_root"] = str(out.get("code_root", "") or APP_ROOT)
     out["boot_prompt_path"] = str(out.get("boot_prompt_path", "") or AGENT_BOOT_PATH)
     out["tool_settings_path"] = str(out.get("tool_settings_path", "") or AGENT_TOOL_SETTINGS_PATH)
-    out["max_steps"] = int(out.get("max_steps", 6) or 6)
+    out["profile_name"] = str(out.get("profile_name", "") or "default")
+    out["task_name"] = str(out.get("task_name", "") or "")
+    out["description"] = str(out.get("description", "") or "")
+    out["mode"] = str(out.get("mode", "") or "shell")
+    out["api_key_env"] = api_key_env
+    step_budget = int(out.get("step_budget", out.get("max_steps", 6)) or out.get("max_steps", 6) or 6)
+    out["step_budget"] = step_budget
+    out["max_steps"] = int(out.get("max_steps", step_budget) or step_budget)
     out["temperature"] = float(out.get("temperature", 0.2) or 0.2)
-    out["debug"] = bool(out.get("debug", False))
+    out["debug"] = bool_value(out.get("debug", False), False)
+    out["interactive"] = bool_value(out.get("interactive", True), True)
+    out["startup_greeting_enabled"] = bool_value(out.get("startup_greeting_enabled", False), False)
+    out["plain_output"] = bool_value(out.get("plain_output", True), True)
+    out["write_report"] = bool_value(out.get("write_report", False), False)
+    out["memory_enabled"] = bool_value(out.get("memory_enabled", True), True)
+    out["output_mode"] = str(out.get("output_mode", "") or ("plain" if out["plain_output"] else "json")).strip().lower()
+    if out["output_mode"] not in ("plain", "json"):
+        out["output_mode"] = "plain"
+    out["report_type"] = str(out.get("report_type", "") or out["output_mode"]).strip().lower()
+    if out["report_type"] not in ("plain", "json"):
+        out["report_type"] = out["output_mode"]
+    out["report_target"] = str(out.get("report_target", "") or "")
+    out["default_query"] = str(out.get("default_query", "") or "")
+    out["task_prompt"] = str(out.get("task_prompt", "") or "")
+    timeout_seconds = int(out.get("timeout_seconds", 120) or 120)
+    if timeout_seconds < 1:
+        timeout_seconds = 120
+    out["timeout_seconds"] = timeout_seconds
+    allowed_tools = out.get("allowed_tools", [])
+    out["allowed_tools"] = allowed_tools if isinstance(allowed_tools, list) else []
     return out
 
 

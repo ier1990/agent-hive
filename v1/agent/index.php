@@ -19,6 +19,72 @@ define('AGENT_AUTO_APPROVE', (bool)env('AGENT_AUTO_APPROVE', false)); // Safety:
 define('AGENT_MAX_CODE_LENGTH', 50000); // Max code size
 define('AGENT_EXEC_TIMEOUT', 30); // Seconds
 
+function agent_tool_is_approved_status(string $status): bool {
+    return strtolower(trim($status)) === 'approved';
+}
+
+function agent_tool_table_has_column(PDO $pdo, string $table, string $column): bool {
+    $rows = $pdo->query("PRAGMA table_info(" . $table . ")")->fetchAll();
+    foreach ($rows as $row) {
+        if (isset($row['name']) && strcasecmp((string)$row['name'], $column) === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function ensure_agent_schema(PDO $pdo): void {
+    $pdo->exec('
+        CREATE TABLE IF NOT EXISTS tools (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT NOT NULL,
+            keywords TEXT DEFAULT "",
+            parameters_schema TEXT DEFAULT "{}",
+            code TEXT NOT NULL,
+            language TEXT DEFAULT "php",
+            is_approved INTEGER DEFAULT 0,
+            is_ai_generated INTEGER DEFAULT 0,
+            run_count INTEGER DEFAULT 0,
+            last_run_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ');
+    $columns = [
+        'status' => "ALTER TABLE tools ADD COLUMN status TEXT DEFAULT 'registered'",
+        'approved_by' => "ALTER TABLE tools ADD COLUMN approved_by TEXT DEFAULT ''",
+        'approved_at' => "ALTER TABLE tools ADD COLUMN approved_at TEXT",
+        'review_notes' => "ALTER TABLE tools ADD COLUMN review_notes TEXT DEFAULT ''",
+        'replaces_tool_id' => "ALTER TABLE tools ADD COLUMN replaces_tool_id INTEGER",
+        'source_type' => "ALTER TABLE tools ADD COLUMN source_type TEXT DEFAULT 'human'",
+        'lineage_key' => "ALTER TABLE tools ADD COLUMN lineage_key TEXT DEFAULT ''",
+    ];
+    foreach ($columns as $column => $sql) {
+        if (!agent_tool_table_has_column($pdo, 'tools', $column)) {
+            $pdo->exec($sql);
+        }
+    }
+    $pdo->exec("UPDATE tools SET status = CASE WHEN COALESCE(is_approved, 0) = 1 THEN 'approved' ELSE 'registered' END WHERE COALESCE(TRIM(status), '') = ''");
+    $pdo->exec("UPDATE tools SET source_type = CASE WHEN COALESCE(is_ai_generated, 0) = 1 THEN 'ai' ELSE 'human' END WHERE COALESCE(TRIM(source_type), '') = ''");
+    $pdo->exec("UPDATE tools SET approved_at = COALESCE(approved_at, updated_at, created_at) WHERE status = 'approved' AND approved_at IS NULL");
+    $pdo->exec("UPDATE tools SET is_approved = CASE WHEN status = 'approved' THEN 1 ELSE 0 END");
+    $pdo->exec('
+        CREATE TABLE IF NOT EXISTS tool_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tool_id INTEGER,
+            tool_name TEXT,
+            input_hash TEXT,
+            input_preview TEXT,
+            output_preview TEXT,
+            success INTEGER,
+            duration_ms INTEGER,
+            client_ip TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ');
+}
+
 // ---- CORS ----
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
@@ -39,36 +105,7 @@ function agent_db(): PDO {
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
     
-    // Ensure schema exists
-    $pdo->exec('
-        CREATE TABLE IF NOT EXISTS tools (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            description TEXT NOT NULL,
-            keywords TEXT DEFAULT "",
-            parameters_schema TEXT DEFAULT "{}",
-            code TEXT NOT NULL,
-            language TEXT DEFAULT "php",
-            is_approved INTEGER DEFAULT 0,
-            is_ai_generated INTEGER DEFAULT 0,
-            run_count INTEGER DEFAULT 0,
-            last_run_at TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS tool_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tool_id INTEGER,
-            tool_name TEXT,
-            input_hash TEXT,
-            input_preview TEXT,
-            output_preview TEXT,
-            success INTEGER,
-            duration_ms INTEGER,
-            client_ip TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-    ');
+    ensure_agent_schema($pdo);
     
     return $pdo;
 }
@@ -85,7 +122,7 @@ function agent_log(string $msg): void {
 
 function find_tool_by_name(string $name): ?array {
     $pdo = agent_db();
-    $stmt = $pdo->prepare('SELECT * FROM tools WHERE name = ? AND is_approved = 1');
+    $stmt = $pdo->prepare("SELECT * FROM tools WHERE name = ? AND (status = 'approved' OR (COALESCE(TRIM(status), '') = '' AND is_approved = 1))");
     $stmt->execute([$name]);
     return $stmt->fetch() ?: null;
 }
@@ -96,13 +133,13 @@ function find_tool_by_intent(string $intent): ?array {
     $words = preg_split('/\s+/', $intent);
     
     // Strategy 1: Exact name match
-    $stmt = $pdo->prepare('SELECT * FROM tools WHERE LOWER(name) = ? AND is_approved = 1');
+    $stmt = $pdo->prepare("SELECT * FROM tools WHERE LOWER(name) = ? AND (status = 'approved' OR (COALESCE(TRIM(status), '') = '' AND is_approved = 1))");
     $stmt->execute([$intent]);
     $match = $stmt->fetch();
     if ($match) return $match;
     
     // Strategy 2: Keyword scoring
-    $stmt = $pdo->query('SELECT * FROM tools WHERE is_approved = 1');
+    $stmt = $pdo->query("SELECT * FROM tools WHERE status = 'approved' OR (COALESCE(TRIM(status), '') = '' AND is_approved = 1)");
     $tools = $stmt->fetchAll();
     
     $scored = [];
@@ -370,7 +407,13 @@ PROMPT;
     // Sanitize
     $tool['name'] = preg_replace('/[^a-z0-9_]/', '_', strtolower($tool['name']));
     $tool['is_ai_generated'] = 1;
+    $tool['source_type'] = 'ai';
+    $tool['status'] = AGENT_AUTO_APPROVE ? 'approved' : 'draft';
     $tool['is_approved'] = AGENT_AUTO_APPROVE ? 1 : 0;
+    if (AGENT_AUTO_APPROVE) {
+        $tool['approved_by'] = 'agent_auto';
+        $tool['approved_at'] = gmdate('Y-m-d H:i:s');
+    }
     
     return $tool;
 }
@@ -383,8 +426,8 @@ function store_ai_tool(array $tool): ?int {
     
     try {
         $stmt = $pdo->prepare('
-            INSERT INTO tools (name, description, keywords, parameters_schema, code, language, is_approved, is_ai_generated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            INSERT INTO tools (name, description, keywords, parameters_schema, code, language, status, is_approved, is_ai_generated, approved_by, approved_at, source_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
         ');
         $stmt->execute([
             $tool['name'],
@@ -393,7 +436,11 @@ function store_ai_tool(array $tool): ?int {
             $paramsJson,
             $tool['code'],
             $tool['language'] ?? 'php',
+            $tool['status'] ?? 'draft',
             $tool['is_approved'] ?? 0,
+            $tool['approved_by'] ?? '',
+            $tool['approved_at'] ?? null,
+            $tool['source_type'] ?? 'ai',
         ]);
         return (int)$pdo->lastInsertId();
     } catch (PDOException $e) {
@@ -434,7 +481,7 @@ if ($method === 'GET') {
         // List available tools
         agent_guard();
         $pdo = agent_db();
-        $stmt = $pdo->query('SELECT name, description, keywords, language, parameters_schema FROM tools WHERE is_approved = 1 ORDER BY name');
+        $stmt = $pdo->query("SELECT name, description, keywords, language, parameters_schema FROM tools WHERE status = 'approved' OR (COALESCE(TRIM(status), '') = '' AND is_approved = 1) ORDER BY name");
         $tools = $stmt->fetchAll();
         http_json(200, ['ok' => true, 'tools' => $tools]);
     }

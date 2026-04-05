@@ -569,6 +569,9 @@ class AliveAgent:
         cfg = self._agent_tools_cfg()
         return bool(cfg.get("enabled", True))
 
+    def _agent_tools_approval_where(self) -> str:
+        return "(status = 'approved' OR (COALESCE(TRIM(status), '') = '' AND is_approved = 1))"
+
     def _load_approved_agent_tool(self, name: str) -> Dict[str, Any]:
         if not self._agent_tools_enabled():
             return {"ok": False, "error": "agent_tools_disabled"}
@@ -583,8 +586,8 @@ class AliveAgent:
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
-                "SELECT id, name, description, keywords, parameters_schema, code, language, is_approved "
-                "FROM tools WHERE name = ? AND is_approved = 1 LIMIT 1",
+                "SELECT id, name, description, keywords, parameters_schema, code, language, status, is_approved "
+                "FROM tools WHERE name = ? AND " + self._agent_tools_approval_where() + " LIMIT 1",
                 (name,),
             ).fetchone()
         finally:
@@ -762,7 +765,7 @@ try {
         try:
             rows = conn.execute(
                 "SELECT name, description, keywords, language, parameters_schema "
-                "FROM tools WHERE is_approved = 1 ORDER BY name ASC LIMIT ?",
+                "FROM tools WHERE " + self._agent_tools_approval_where() + " ORDER BY name ASC LIMIT ?",
                 (limit,),
             ).fetchall()
         finally:

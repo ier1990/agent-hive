@@ -25,6 +25,9 @@ This directory contains the split Python agent stack behind the admin AI shell.
 - `default_agent.json`
   - Versioned default profile template for the Python agent.
   - Includes the startup greeting defaults used unless private config overrides them.
+- `profiles/`
+  - Example role/profile JSON files for shell, worker, reviewer, and toolsmith use.
+  - Safe to copy and adapt into private runtime config files.
 - `mc.md`
   - Draft notes for a future `/mc` file browser.
   - Design document only; not wired into the current shell.
@@ -37,7 +40,8 @@ The resolved runtime profile is assembled in this order:
 2. versioned defaults from `admin/AI/default_agent.json`
 3. shared PHP AI settings from `/web/private/db/codewalker_settings.db`
 4. optional private overrides from `/web/private/agent.json`
-5. CLI overrides like `--model`, `--base-url`, or `--boot-prompt-path`
+5. optional profile override from `--config-file`
+6. direct CLI overrides like `--model`, `--base-url`, or `--boot-prompt-path`
 
 Rules worth knowing:
 
@@ -49,6 +53,8 @@ Rules worth knowing:
 
 - Agent profile template: `admin/AI/default_agent.json`
 - Private agent override: `/web/private/agent.json`
+- Optional per-role profile file: any JSON passed through `--config-file`
+- Example profile directory: `admin/AI/profiles/`
 - Tool settings: `/web/private/agent_tools.json`
 - Shared AI settings DB: `/web/private/db/codewalker_settings.db`
 - Approved admin tools DB: `/web/private/db/agent_tools.db`
@@ -76,6 +82,44 @@ Important behavior:
 - `read_code` is restricted to paths under the configured `code_root`.
 - `search` uses the configured Searx endpoint and returns structured results plus a text summary.
 - Memory schema is auto-created on first use if the memory DB does not exist yet.
+
+## Admin-managed tools contract
+
+Admin-managed tools in `/web/private/db/agent_tools.db` now follow a status-based lifecycle.
+
+Tool statuses:
+
+- `draft`
+- `registered`
+- `approved`
+- `disabled`
+- `deprecated`
+- `rejected`
+- `superseded`
+
+Supporting workflow fields:
+
+- `approved_by`
+- `approved_at`
+- `review_notes`
+- `replaces_tool_id`
+- `source_type`
+- `lineage_key`
+
+Execution rule:
+
+- only tools with `status = approved` are executable through the normal runtime
+
+Creation defaults:
+
+- AI-created tools should default to `draft`
+- human-created tools should default to `registered`
+- imported tools should default to `registered` unless explicitly promoted by admin workflow
+
+Compatibility note:
+
+- legacy `is_approved` may still exist in the DB for migration compatibility
+- current runtime behavior should treat `status` as the source of truth and keep `is_approved` synchronized from it
 
 ## Preloaded context
 
@@ -129,6 +173,7 @@ The greeting bypasses the JSON tool loop on purpose:
 
 `agent.py` currently supports:
 
+- `--config-file`
 - `--query`
 - `--list-models`
 - `--model`
@@ -140,14 +185,82 @@ The greeting bypasses the JSON tool loop on purpose:
 - `--tool-settings-path`
 - `--max-steps`
 - `--temperature`
+- `--output-mode`
+- `--interactive`
+- `--no-interactive`
 - `--debug`
 - `--no-debug`
+
+## Profile fields
+
+Profile JSON now supports role-oriented fields for cron and worker-style use:
+
+- `profile_name`
+- `task_name`
+- `description`
+- `mode`
+- `model`
+- `base_url`
+- `api_key`
+- `api_key_env`
+- `max_steps`
+- `step_budget`
+- `temperature`
+- `startup_greeting_enabled`
+- `interactive`
+- `output_mode`
+- `write_report`
+- `report_type`
+- `report_target`
+- `notes_db`
+- `code_root`
+- `boot_prompt_path`
+- `tool_settings_path`
+- `memory_enabled`
+- `allowed_tools`
+- `default_query`
+- `task_prompt`
+- `timeout_seconds`
+
+Useful behavior:
+
+- `api_key_env` stores the env var name, not the secret itself
+- the real secret is resolved from process environment first, then `/web/private/.env`
+- `default_query` and `task_prompt` let a profile define a default job prompt for non-interactive runs
+- `interactive: false` makes cron-style profiles cleaner
+- `write_report` plus `report_target` can persist single-shot output to a file
+- `memory_enabled` can disable agent memory without needing a separate tool settings file
+
+Example profile files:
+
+- `admin/AI/profiles/interactive_shell.example.json`
+- `admin/AI/profiles/apache_log_worker.example.json`
+- `admin/AI/profiles/reviewer_agent.example.json`
+- `admin/AI/profiles/toolsmith_agent.example.json`
+- `admin/AI/profiles/openai_hosted.example.json`
+- `admin/AI/profiles/lmstudio_local.example.json`
+
+Provider hint:
+
+- use `api_key_env: OPENAI_API_KEY` for hosted OpenAI-style profiles
+- use `api_key_env: LLM_API_KEY` for local OpenAI-compatible backends like LM Studio when you want to keep the key name abstracted in env or `.env`
+
+## Local docs
+
+Useful docs in this directory:
+
+- `admin/AI/README.md`
+- `admin/AI/AI_tools.md`
+- `admin/AI/AI_Hive_concept.md`
+- `admin/AI/agent_boot.md`
+- `admin/AI/mc.md`
 
 ## Notes
 
 - Keep new agent modules in this same directory unless there is a strong reason to move them.
 - `agent_boot.md` is the first place to tune model behavior before changing runtime code.
 - For local project questions, the prompt contract prefers memory, notes, code search, and `read_code` before web search.
+- AI may draft tools, but should never self-approve them.
 - Repeated identical tool calls are loop-guarded; the runtime stops after the same tool+args fingerprint repeats more than twice.
 
 ## Questions

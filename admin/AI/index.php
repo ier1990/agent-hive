@@ -19,7 +19,26 @@ $files = [
     ['name' => 'agent_shell.py', 'desc' => 'Interactive shell banner, slash commands, history, and startup greeting support'],
     ['name' => 'default_agent.json', 'desc' => 'Versioned default profile template including startup greeting defaults'],
     ['name' => 'README.md', 'desc' => 'Up-to-date reference notes for this agent area'],
+    ['name' => 'AI_tools.md', 'desc' => 'Toolsmith contract and tool lifecycle notes'],
+    ['name' => 'AI_Hive_concept.md', 'desc' => 'Layered AgentHive architecture and worker/reviewer concept'],
     ['name' => 'mc.md', 'desc' => 'Draft design notes for a future /mc file browser'],
+];
+
+$doc_links = [
+    ['name' => 'README.md', 'path' => '/admin/AI/README.md', 'desc' => 'Main agent reference and config/profile docs'],
+    ['name' => 'AI_tools.md', 'path' => '/admin/AI/AI_tools.md', 'desc' => 'Toolsmith contract, lifecycle, and safety rules'],
+    ['name' => 'AI_Hive_concept.md', 'path' => '/admin/AI/AI_Hive_concept.md', 'desc' => 'High-level architecture, worker pattern, and step budgets'],
+    ['name' => 'agent_boot.md', 'path' => '/admin/AI/agent_boot.md', 'desc' => 'Current boot/system prompt contract'],
+    ['name' => 'mc.md', 'path' => '/admin/AI/mc.md', 'desc' => 'Midnight Commander style browser draft'],
+];
+
+$profile_examples = [
+    ['name' => 'interactive_shell.example.json', 'path' => '/admin/AI/profiles/interactive_shell.example.json', 'desc' => 'Starter interactive shell profile'],
+    ['name' => 'apache_log_worker.example.json', 'path' => '/admin/AI/profiles/apache_log_worker.example.json', 'desc' => 'Cron-safe Apache worker example'],
+    ['name' => 'reviewer_agent.example.json', 'path' => '/admin/AI/profiles/reviewer_agent.example.json', 'desc' => 'Reviewer/supervisor profile example'],
+    ['name' => 'toolsmith_agent.example.json', 'path' => '/admin/AI/profiles/toolsmith_agent.example.json', 'desc' => 'Toolsmith review and drafting example'],
+    ['name' => 'openai_hosted.example.json', 'path' => '/admin/AI/profiles/openai_hosted.example.json', 'desc' => 'Hosted OpenAI profile using `OPENAI_API_KEY`'],
+    ['name' => 'lmstudio_local.example.json', 'path' => '/admin/AI/profiles/lmstudio_local.example.json', 'desc' => 'Local LM Studio profile using `LLM_API_KEY`'],
 ];
 
 $config_precedence = [
@@ -27,12 +46,14 @@ $config_precedence = [
     'Versioned defaults from admin/AI/default_agent.json',
     'Shared PHP AI settings from /web/private/db/codewalker_settings.db',
     'Optional private overrides from /web/private/agent.json',
-    'CLI overrides like --model, --base-url, and --boot-prompt-path',
+    'Optional profile override from --config-file',
+    'Direct CLI overrides like --model, --base-url, and --boot-prompt-path',
 ];
 
 $runtime_files = [
     'Agent profile template' => 'admin/AI/default_agent.json',
     'Private agent override' => '/web/private/agent.json',
+    'Example profiles' => 'admin/AI/profiles/',
     'Tool settings' => '/web/private/agent_tools.json',
     'Shared AI settings DB' => '/web/private/db/codewalker_settings.db',
     'Approved admin tools DB' => '/web/private/db/agent_tools.db',
@@ -73,6 +94,7 @@ $shell_commands = [
 ];
 
 $cli_flags = [
+    '--config-file',
     '--query',
     '--list-models',
     '--model',
@@ -84,6 +106,9 @@ $cli_flags = [
     '--tool-settings-path',
     '--max-steps',
     '--temperature',
+    '--output-mode',
+    '--interactive',
+    '--no-interactive',
     '--debug',
     '--no-debug',
 ];
@@ -441,6 +466,34 @@ $quick_start = [
             <div class="muted"><code><?= h($path) ?></code></div>
           </div>
         <?php endforeach; ?>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Docs in This Directory</h2>
+      <div class="file-list">
+        <?php foreach ($doc_links as $doc): ?>
+          <div class="file-row">
+            <strong><a href="<?= h($doc['path']) ?>" target="_blank" rel="noopener noreferrer"><?= h($doc['name']) ?></a></strong>
+            <div class="muted"><?= h($doc['desc']) ?></div>
+          </div>
+        <?php endforeach; ?>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Profile Examples</h2>
+      <div class="file-list">
+        <?php foreach ($profile_examples as $profile): ?>
+          <div class="file-row">
+            <strong><a href="<?= h($profile['path']) ?>" target="_blank" rel="noopener noreferrer"><?= h($profile['name']) ?></a></strong>
+            <div class="muted"><?= h($profile['desc']) ?></div>
+          </div>
+        <?php endforeach; ?>
+      </div>
+      <div class="subtext">
+        Hosted OpenAI-style profiles usually use <code>api_key_env: OPENAI_API_KEY</code>.
+        Local OpenAI-compatible backends like LM Studio usually use <code>api_key_env: LLM_API_KEY</code>.
       </div>
     </section>
 

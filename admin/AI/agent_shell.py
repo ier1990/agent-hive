@@ -54,6 +54,7 @@ def setup_readline() -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Alive notes+code AI agent")
+    parser.add_argument("--config-file", default="", help="Optional agent profile JSON to merge after /web/private/agent.json and before direct CLI overrides.")
     parser.add_argument("--query", default="", help="Single-shot query. If omitted, runs interactive mode.")
     parser.add_argument("--list-models", action="store_true", help="List model IDs from base-url/models and exit.")
     parser.add_argument("--model", default=None, help="Model override. Defaults to the active PHP AI setup model.")
@@ -65,6 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tool-settings-path", default=None, help="Tool settings override. Defaults to agent.json or /web/private/agent_tools.json.")
     parser.add_argument("--max-steps", type=int, default=None, help="Max steps override.")
     parser.add_argument("--temperature", type=float, default=None, help="Temperature override.")
+    parser.add_argument("--output-mode", default=None, choices=["plain", "json"], help="Single-shot output format override.")
+    parser.add_argument("--interactive", dest="interactive", action="store_true", default=None, help="Force interactive shell mode.")
+    parser.add_argument("--no-interactive", dest="interactive", action="store_false", help="Disable interactive shell mode.")
     parser.add_argument("--debug", dest="debug", action="store_true", default=None, help="Enable debug logging.")
     parser.add_argument("--no-debug", dest="debug", action="store_false", help="Disable debug logging.")
     return parser

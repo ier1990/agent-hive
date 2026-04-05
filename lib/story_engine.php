@@ -478,11 +478,13 @@ if (!function_exists('story_run_agent_tool')) {
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
       ]);
-      $stmt = $db->prepare('SELECT id,name,code,language,is_approved FROM tools WHERE name = ? LIMIT 1');
+      $stmt = $db->prepare('SELECT id,name,code,language,status,is_approved FROM tools WHERE name = ? LIMIT 1');
       $stmt->execute([$toolName]);
       $tool = $stmt->fetch();
       if (!$tool) return ['ok' => false, 'error' => 'Tool not found'];
-      if ((int)$tool['is_approved'] !== 1) return ['ok' => false, 'error' => 'Tool is not approved'];
+      $status = strtolower(trim((string)($tool['status'] ?? '')));
+      if ($status === '') $status = ((int)$tool['is_approved'] === 1) ? 'approved' : 'registered';
+      if ($status !== 'approved') return ['ok' => false, 'error' => 'Tool is not approved'];
 
       $lang = strtolower((string)($tool['language'] ?? 'php'));
       if ($lang !== 'php') {
@@ -516,7 +518,7 @@ if (!function_exists('story_list_agent_tools')) {
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
       ]);
-      $rows = $db->query("SELECT name,description FROM tools WHERE is_approved = 1 AND name LIKE 'story_%' ORDER BY name ASC")->fetchAll();
+      $rows = $db->query("SELECT name,description FROM tools WHERE (status = 'approved' OR (COALESCE(TRIM(status), '') = '' AND is_approved = 1)) AND name LIKE 'story_%' ORDER BY name ASC")->fetchAll();
       return is_array($rows) ? $rows : [];
     } catch (Throwable $t) {
       return [];

@@ -14,6 +14,101 @@ auth_require_admin();
 define('AGENT_DB_PATH', PRIVATE_ROOT . '/db/agent_tools.db');
 define('TOOLS_JSON_PATH', __DIR__ . '/defaults/agent_tools.json');
 
+function tool_allowed_statuses(): array {
+    return ['draft', 'registered', 'approved', 'disabled', 'deprecated', 'rejected', 'superseded'];
+}
+
+function tool_allowed_source_types(): array {
+    return ['human', 'ai', 'imported'];
+}
+
+function normalize_tool_status($status, string $fallback = 'registered'): string {
+    $value = strtolower(trim((string)$status));
+    return in_array($value, tool_allowed_statuses(), true) ? $value : $fallback;
+}
+
+function normalize_tool_source_type($sourceType, string $fallback = 'human'): string {
+    $value = strtolower(trim((string)$sourceType));
+    return in_array($value, tool_allowed_source_types(), true) ? $value : $fallback;
+}
+
+function tool_status_is_approved(string $status): bool {
+    return normalize_tool_status($status) === 'approved';
+}
+
+function tool_table_has_column(PDO $pdo, string $table, string $column): bool {
+    $rows = $pdo->query("PRAGMA table_info(" . $table . ")")->fetchAll();
+    foreach ($rows as $row) {
+        if (isset($row['name']) && strcasecmp((string)$row['name'], $column) === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function ensure_agent_tools_schema(PDO $pdo): void {
+    $pdo->exec('
+        CREATE TABLE IF NOT EXISTS tools (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT NOT NULL,
+            keywords TEXT DEFAULT "",
+            parameters_schema TEXT DEFAULT "{}",
+            code TEXT NOT NULL,
+            language TEXT DEFAULT "php",
+            is_approved INTEGER DEFAULT 0,
+            is_ai_generated INTEGER DEFAULT 0,
+            run_count INTEGER DEFAULT 0,
+            last_run_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ');
+
+    $columns = [
+        'status' => "ALTER TABLE tools ADD COLUMN status TEXT DEFAULT 'registered'",
+        'approved_by' => "ALTER TABLE tools ADD COLUMN approved_by TEXT DEFAULT ''",
+        'approved_at' => "ALTER TABLE tools ADD COLUMN approved_at TEXT",
+        'review_notes' => "ALTER TABLE tools ADD COLUMN review_notes TEXT DEFAULT ''",
+        'replaces_tool_id' => "ALTER TABLE tools ADD COLUMN replaces_tool_id INTEGER",
+        'source_type' => "ALTER TABLE tools ADD COLUMN source_type TEXT DEFAULT 'human'",
+        'lineage_key' => "ALTER TABLE tools ADD COLUMN lineage_key TEXT DEFAULT ''",
+    ];
+    foreach ($columns as $column => $sql) {
+        if (!tool_table_has_column($pdo, 'tools', $column)) {
+            $pdo->exec($sql);
+        }
+    }
+
+    $pdo->exec("UPDATE tools SET status = CASE WHEN COALESCE(is_approved, 0) = 1 THEN 'approved' ELSE 'registered' END WHERE COALESCE(TRIM(status), '') = ''");
+    $pdo->exec("UPDATE tools SET source_type = CASE WHEN COALESCE(is_ai_generated, 0) = 1 THEN 'ai' ELSE 'human' END WHERE COALESCE(TRIM(source_type), '') = ''");
+    $pdo->exec("UPDATE tools SET approved_at = COALESCE(approved_at, updated_at, created_at) WHERE status = 'approved' AND approved_at IS NULL");
+    $pdo->exec("UPDATE tools SET is_approved = CASE WHEN status = 'approved' THEN 1 ELSE 0 END");
+
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_tools_name ON tools(name)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_tools_keywords ON tools(keywords)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_tools_approved ON tools(is_approved)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_tools_status ON tools(status)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_tools_source_type ON tools(source_type)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_tools_lineage_key ON tools(lineage_key)');
+    $pdo->exec('
+        CREATE TABLE IF NOT EXISTS tool_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tool_id INTEGER,
+            tool_name TEXT,
+            input_hash TEXT,
+            input_preview TEXT,
+            output_preview TEXT,
+            success INTEGER,
+            duration_ms INTEGER,
+            client_ip TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_runs_tool ON tool_runs(tool_id)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_runs_time ON tool_runs(created_at)');
+}
+
 // ---- Database Setup ----
 
 function templates_db(): SQLite3 {
@@ -47,47 +142,7 @@ function agent_db(): PDO {
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
     
-    // Create schema
-    $pdo->exec('
-        CREATE TABLE IF NOT EXISTS tools (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            description TEXT NOT NULL,
-            keywords TEXT DEFAULT "",
-            parameters_schema TEXT DEFAULT "{}",
-            code TEXT NOT NULL,
-            language TEXT DEFAULT "php",
-            is_approved INTEGER DEFAULT 0,
-            is_ai_generated INTEGER DEFAULT 0,
-            run_count INTEGER DEFAULT 0,
-            last_run_at TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_tools_name ON tools(name);
-        CREATE INDEX IF NOT EXISTS idx_tools_keywords ON tools(keywords);
-        CREATE INDEX IF NOT EXISTS idx_tools_approved ON tools(is_approved);
-    ');
-    
-    // Execution log for auditing
-    $pdo->exec('
-        CREATE TABLE IF NOT EXISTS tool_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tool_id INTEGER,
-            tool_name TEXT,
-            input_hash TEXT,
-            input_preview TEXT,
-            output_preview TEXT,
-            success INTEGER,
-            duration_ms INTEGER,
-            client_ip TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_runs_tool ON tool_runs(tool_id);
-        CREATE INDEX IF NOT EXISTS idx_runs_time ON tool_runs(created_at);
-    ');
+    ensure_agent_tools_schema($pdo);
     
     return $pdo;
 }
@@ -126,8 +181,23 @@ function upsert_tool(array $tool): array {
     $code = trim($tool['code'] ?? '');
     $language = trim($tool['language'] ?? 'php');
     $paramsSchema = $tool['parameters_schema'] ?? $tool['parameters'] ?? [];
-    $isApproved = (int)($tool['is_approved'] ?? 1); // Manual loads are approved by default
+    $sourceType = normalize_tool_source_type($tool['source_type'] ?? ((int)($tool['is_ai_generated'] ?? 0) === 1 ? 'ai' : 'human'));
+    $defaultStatus = $sourceType === 'ai' ? 'draft' : 'registered';
+    $status = normalize_tool_status($tool['status'] ?? (((int)($tool['is_approved'] ?? -1) === 1) ? 'approved' : $defaultStatus), $defaultStatus);
+    $isApproved = tool_status_is_approved($status) ? 1 : 0;
     $isAiGenerated = (int)($tool['is_ai_generated'] ?? 0);
+    $approvedBy = trim((string)($tool['approved_by'] ?? ''));
+    $approvedAt = trim((string)($tool['approved_at'] ?? ''));
+    $reviewNotes = trim((string)($tool['review_notes'] ?? ''));
+    $replacesToolId = isset($tool['replaces_tool_id']) && $tool['replaces_tool_id'] !== '' ? (int)$tool['replaces_tool_id'] : null;
+    $lineageKey = trim((string)($tool['lineage_key'] ?? $tool['draft_group'] ?? ''));
+    $currentUser = (string)($_SERVER['PHP_AUTH_USER'] ?? $_SERVER['REMOTE_USER'] ?? 'admin');
+    if ($isApproved === 1 && $approvedBy === '') {
+        $approvedBy = $currentUser;
+    }
+    if ($isApproved === 1 && $approvedAt === '') {
+        $approvedAt = gmdate('Y-m-d H:i:s');
+    }
     
     if ($code === '') {
         return ['ok' => false, 'error' => 'Tool code required'];
@@ -150,26 +220,33 @@ function upsert_tool(array $tool): array {
                 parameters_schema = ?,
                 code = ?,
                 language = ?,
+                status = ?,
                 is_approved = ?,
                 is_ai_generated = ?,
+                approved_by = ?,
+                approved_at = ?,
+                review_notes = ?,
+                replaces_tool_id = ?,
+                source_type = ?,
+                lineage_key = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE name = ?
         ');
-        $stmt->execute([$description, $keywords, $paramsJson, $code, $language, $isApproved, $isAiGenerated, $name]);
-        return ['ok' => true, 'action' => 'updated', 'name' => $name];
+        $stmt->execute([$description, $keywords, $paramsJson, $code, $language, $status, $isApproved, $isAiGenerated, $approvedBy, $approvedAt !== '' ? $approvedAt : null, $reviewNotes, $replacesToolId, $sourceType, $lineageKey, $name]);
+        return ['ok' => true, 'action' => 'updated', 'name' => $name, 'status' => $status];
     } else {
         $stmt = $pdo->prepare('
-            INSERT INTO tools (name, description, keywords, parameters_schema, code, language, is_approved, is_ai_generated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tools (name, description, keywords, parameters_schema, code, language, status, is_approved, is_ai_generated, approved_by, approved_at, review_notes, replaces_tool_id, source_type, lineage_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ');
-        $stmt->execute([$name, $description, $keywords, $paramsJson, $code, $language, $isApproved, $isAiGenerated]);
-        return ['ok' => true, 'action' => 'created', 'name' => $name];
+        $stmt->execute([$name, $description, $keywords, $paramsJson, $code, $language, $status, $isApproved, $isAiGenerated, $approvedBy, $approvedAt !== '' ? $approvedAt : null, $reviewNotes, $replacesToolId, $sourceType, $lineageKey]);
+        return ['ok' => true, 'action' => 'created', 'name' => $name, 'status' => $status];
     }
 }
 
 function list_tools(): array {
     $pdo = agent_db();
-    $stmt = $pdo->query('SELECT id, name, description, keywords, language, is_approved, is_ai_generated, run_count, created_at, updated_at FROM tools ORDER BY name');
+    $stmt = $pdo->query('SELECT id, name, description, keywords, language, status, is_approved, is_ai_generated, approved_by, approved_at, review_notes, replaces_tool_id, source_type, lineage_key, run_count, created_at, updated_at FROM tools ORDER BY name');
     return $stmt->fetchAll();
 }
 
@@ -188,15 +265,32 @@ function delete_tool(string $name): bool {
     return $stmt->rowCount() > 0;
 }
 
-function toggle_approval(string $name): array {
+function set_tool_status(string $name, string $status, string $reviewNotes = ''): array {
     $pdo = agent_db();
-    $stmt = $pdo->prepare('UPDATE tools SET is_approved = 1 - is_approved, updated_at = CURRENT_TIMESTAMP WHERE name = ?');
-    $stmt->execute([$name]);
+    $status = normalize_tool_status($status, 'registered');
+    $approved = tool_status_is_approved($status) ? 1 : 0;
+    $approvedBy = $approved ? (string)($_SERVER['PHP_AUTH_USER'] ?? $_SERVER['REMOTE_USER'] ?? 'admin') : '';
+    $approvedAt = $approved ? gmdate('Y-m-d H:i:s') : null;
+    $sql = 'UPDATE tools SET status = ?, is_approved = ?, updated_at = CURRENT_TIMESTAMP';
+    $params = [$status, $approved];
+    if ($approved) {
+        $sql .= ', approved_by = ?, approved_at = ?';
+        $params[] = $approvedBy;
+        $params[] = $approvedAt;
+    }
+    if ($reviewNotes !== '') {
+        $sql .= ', review_notes = ?';
+        $params[] = $reviewNotes;
+    }
+    $sql .= ' WHERE name = ?';
+    $params[] = $name;
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
     if ($stmt->rowCount() === 0) {
         return ['ok' => false, 'error' => 'Tool not found'];
     }
     $tool = get_tool($name);
-    return ['ok' => true, 'name' => $name, 'is_approved' => (int)($tool['is_approved'] ?? 0)];
+    return ['ok' => true, 'name' => $name, 'status' => (string)($tool['status'] ?? 'registered'), 'is_approved' => (int)($tool['is_approved'] ?? 0)];
 }
 
 // ---- Template Functions ----
@@ -309,8 +403,14 @@ if ($action !== '') {
             'keywords' => $_POST['keywords'] ?? '',
             'code' => $_POST['code'] ?? '',
             'language' => $_POST['language'] ?? 'php',
+            'status' => $_POST['status'] ?? '',
             'parameters_schema' => $_POST['parameters_schema'] ?? '{}',
-            'is_approved' => isset($_POST['is_approved']) ? (int)$_POST['is_approved'] : 1,
+            'approved_by' => $_POST['approved_by'] ?? '',
+            'approved_at' => $_POST['approved_at'] ?? '',
+            'review_notes' => $_POST['review_notes'] ?? '',
+            'replaces_tool_id' => $_POST['replaces_tool_id'] ?? '',
+            'source_type' => $_POST['source_type'] ?? '',
+            'lineage_key' => $_POST['lineage_key'] ?? '',
         ];
         $result = upsert_tool($tool);
         echo json_encode($result);
@@ -340,7 +440,23 @@ if ($action !== '') {
     
     if ($action === 'toggle_approval' && $method === 'POST') {
         $name = $_POST['name'] ?? '';
-        $result = toggle_approval($name);
+        $current = get_tool($name);
+        if (!$current) {
+            echo json_encode(['ok' => false, 'error' => 'Tool not found']);
+            exit;
+        }
+        $currentStatus = normalize_tool_status($current['status'] ?? (((int)($current['is_approved'] ?? 0) === 1) ? 'approved' : 'registered'));
+        $nextStatus = $currentStatus === 'approved' ? 'registered' : 'approved';
+        $result = set_tool_status($name, $nextStatus);
+        echo json_encode($result);
+        exit;
+    }
+
+    if ($action === 'set_status' && $method === 'POST') {
+        $name = $_POST['name'] ?? '';
+        $status = $_POST['status'] ?? 'registered';
+        $reviewNotes = $_POST['review_notes'] ?? '';
+        $result = set_tool_status($name, $status, $reviewNotes);
         echo json_encode($result);
         exit;
     }
@@ -404,7 +520,14 @@ if ($action !== '') {
                     'parameters_schema' => json_decode($full['parameters_schema'] ?: '{}', true),
                     'code' => $full['code'],
                     'language' => $full['language'],
+                    'status' => $full['status'] ?? (((int)$full['is_approved'] === 1) ? 'approved' : 'registered'),
                     'is_approved' => (int)$full['is_approved'],
+                    'approved_by' => $full['approved_by'] ?? '',
+                    'approved_at' => $full['approved_at'] ?? '',
+                    'review_notes' => $full['review_notes'] ?? '',
+                    'replaces_tool_id' => isset($full['replaces_tool_id']) ? (int)$full['replaces_tool_id'] : null,
+                    'source_type' => $full['source_type'] ?? ((int)$full['is_ai_generated'] === 1 ? 'ai' : 'human'),
+                    'lineage_key' => $full['lineage_key'] ?? '',
                 ];
             }
         }
@@ -461,7 +584,7 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent Tools DB Loader</title>
+    <title>Agent Toolsmith Workbench</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -563,15 +686,19 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
         @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         code { background: #0d1117; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
         .mono { font-family: 'Monaco', 'Menlo', monospace; font-size: 12px; }
-        .approved { color: #3fb950; }
-        .pending { color: #d29922; }
+        .status-label { display:inline-block; padding: 3px 8px; border-radius: 999px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+        .status-approved { color: #bbf7d0; background: rgba(34, 197, 94, 0.16); }
+        .status-draft { color: #fde68a; background: rgba(245, 158, 11, 0.16); }
+        .status-registered { color: #bfdbfe; background: rgba(59, 130, 246, 0.16); }
+        .status-disabled, .status-deprecated, .status-superseded, .status-rejected { color: #fca5a5; background: rgba(239, 68, 68, 0.16); }
         .ai-badge { background: #8957e5; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+        .source-badge { background: #1f2937; color: #cbd5e1; padding: 2px 6px; border-radius: 4px; font-size: 11px; text-transform: uppercase; }
         a { color: #58a6ff; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🧠 Agent Tools Database</h1>
+        <h1>🧠 Agent Toolsmith Workbench</h1>
         
         <div class="card">
             <h2 style="margin-top:0">System Status</h2>
@@ -584,26 +711,40 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                 <?php endif; ?>
             </p>
             <p>
-                <strong>Tools JSON:</strong>
+                <strong>Default tools JSON:</strong>
                 <?php if ($jsonExists): ?>
                     <span class="status ok">Found</span> <code class="mono"><?= htmlspecialchars(TOOLS_JSON_PATH) ?></code>
                 <?php else: ?>
                     <span class="status warn">Not found</span> - Create at <code><?= htmlspecialchars(TOOLS_JSON_PATH) ?></code>
                 <?php endif; ?>
             </p>
-            <p><strong>Tools loaded:</strong> <?= count($tools) ?></p>
+            <p><strong>Tools registered:</strong> <?= count($tools) ?></p>
+            <p style="color:#8b949e; margin-top:8px;">
+                Normal runtime execution only allows tools with <code>status = approved</code>.
+                AI-created tools should start as <code>draft</code>. Human and imported tools should usually start as <code>registered</code>.
+            </p>
             
             <div class="btn-group">
-                <button class="btn btn-primary" onclick="loadFromJson()">📥 Load Defaults</button>
-                <button class="btn btn-secondary" onclick="importJsonFile()">📂 Import JSON File</button>
-                <button class="btn btn-secondary" onclick="openEditor()">➕ Add Tool</button>
-                <button class="btn btn-secondary" onclick="exportTools()">📤 Export All</button>
+                <button class="btn btn-primary" onclick="loadFromJson()">📥 Load Default Tools</button>
+                <button class="btn btn-secondary" onclick="importJsonFile()">📂 Import Tool JSON</button>
+                <button class="btn btn-secondary" onclick="openEditor()">➕ Add Tool Draft</button>
+                <button class="btn btn-secondary" onclick="exportTools()">📤 Export Tool Registry</button>
             </div>
             <input type="file" id="json-file-input" style="display:none" accept=".json" onchange="handleJsonFileUpload(event)">
         </div>
         
         <div class="card">
-            <h2 style="margin-top:0">Registered Tools</h2>
+            <h2 style="margin-top:0">Tool Registry</h2>
+            <p style="color:#8b949e; margin-top:0;">
+                Use statuses to move tools through the workflow:
+                <code>draft</code>,
+                <code>registered</code>,
+                <code>approved</code>,
+                <code>disabled</code>,
+                <code>deprecated</code>,
+                <code>rejected</code>,
+                <code>superseded</code>.
+            </p>
             <table id="tools-table">
                 <thead>
                     <tr>
@@ -611,35 +752,61 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                         <th>Description</th>
                         <th>Language</th>
                         <th>Status</th>
+                        <th>Review</th>
+                        <th>Lineage</th>
                         <th>Runs</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if (empty($tools)): ?>
-                    <tr><td colspan="6" style="text-align:center;color:#8b949e;padding:40px;">No tools registered yet. Load from JSON or add manually.</td></tr>
+                    <tr><td colspan="8" style="text-align:center;color:#8b949e;padding:40px;">No tools registered yet. Load default tools, import JSON, or add a draft manually.</td></tr>
                     <?php else: ?>
                     <?php foreach ($tools as $t): ?>
                     <tr data-name="<?= htmlspecialchars($t['name']) ?>">
                         <td>
                             <strong><?= htmlspecialchars($t['name']) ?></strong>
                             <?php if ($t['is_ai_generated']): ?><span class="ai-badge">AI</span><?php endif; ?>
+                            <span class="source-badge"><?= htmlspecialchars($t['source_type'] ?: ($t['is_ai_generated'] ? 'ai' : 'human')) ?></span>
                         </td>
                         <td><?= htmlspecialchars(substr($t['description'], 0, 60)) ?><?= strlen($t['description']) > 60 ? '...' : '' ?></td>
                         <td><code><?= htmlspecialchars($t['language']) ?></code></td>
                         <td>
-                            <?php if ($t['is_approved']): ?>
-                                <span class="approved">✓ Approved</span>
+                            <?php $status = normalize_tool_status($t['status'] ?? (((int)$t['is_approved'] === 1) ? 'approved' : 'registered')); ?>
+                            <span class="status-label status-<?= htmlspecialchars($status) ?>"><?= htmlspecialchars($status) ?></span>
+                        </td>
+                        <td>
+                            <?php if (!empty($t['approved_by']) || !empty($t['approved_at'])): ?>
+                                <div style="font-size:12px; color:#c9d1d9;">
+                                    <?= htmlspecialchars((string)($t['approved_by'] ?: 'approved')) ?>
+                                </div>
+                                <?php if (!empty($t['approved_at'])): ?>
+                                    <div style="font-size:11px; color:#8b949e;"><?= htmlspecialchars((string)$t['approved_at']) ?></div>
+                                <?php endif; ?>
+                            <?php elseif (!empty($t['review_notes'])): ?>
+                                <div style="font-size:12px; color:#8b949e;"><?= htmlspecialchars(substr((string)$t['review_notes'], 0, 60)) ?><?= strlen((string)$t['review_notes']) > 60 ? '...' : '' ?></div>
                             <?php else: ?>
-                                <span class="pending">⏳ Pending</span>
+                                <span style="color:#8b949e;">-</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if (!empty($t['lineage_key'])): ?>
+                                <div><code><?= htmlspecialchars((string)$t['lineage_key']) ?></code></div>
+                            <?php endif; ?>
+                            <?php if (!empty($t['replaces_tool_id'])): ?>
+                                <div style="font-size:11px; color:#8b949e;">replaces #<?= (int)$t['replaces_tool_id'] ?></div>
+                            <?php elseif (empty($t['lineage_key'])): ?>
+                                <span style="color:#8b949e;">-</span>
                             <?php endif; ?>
                         </td>
                         <td><?= (int)$t['run_count'] ?></td>
                         <td>
                             <button class="btn btn-secondary btn-sm" onclick="editTool('<?= htmlspecialchars($t['name']) ?>')">Edit</button>
-                            <button class="btn btn-secondary btn-sm" onclick="toggleApproval('<?= htmlspecialchars($t['name']) ?>')">
-                                <?= $t['is_approved'] ? 'Revoke' : 'Approve' ?>
-                            </button>
+                            <select class="btn btn-secondary btn-sm" onchange="setStatus('<?= htmlspecialchars($t['name']) ?>', this.value)">
+                                <?php foreach (tool_allowed_statuses() as $allowedStatus): ?>
+                                    <option value="<?= htmlspecialchars($allowedStatus) ?>"<?= $status === $allowedStatus ? ' selected' : '' ?>><?= htmlspecialchars($allowedStatus) ?></option>
+                                <?php endforeach; ?>
+                            </select>
                             <button class="btn btn-danger btn-sm" onclick="deleteTool('<?= htmlspecialchars($t['name']) ?>')">Delete</button>
                         </td>
                     </tr>
@@ -676,7 +843,7 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
     <div class="modal" id="editor-modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 id="editor-title">Add Tool</h3>
+                <h3 id="editor-title">Add Tool Draft</h3>
                 <button class="close" onclick="closeEditor()">&times;</button>
             </div>
             <form id="tool-form" onsubmit="saveTool(event)">
@@ -684,6 +851,9 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                     <div class="form-group">
                         <label for="tool-name">Name (unique identifier)</label>
                         <input type="text" id="tool-name" name="name" required placeholder="get_weather">
+                        <div style="font-size:11px; color:#8b949e; margin-top:6px;">
+                            Existing tool names are locked during edit so status and review changes update the same record.
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="tool-language">Language</label>
@@ -691,6 +861,24 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                             <option value="php">PHP</option>
                             <option value="python">Python</option>
                             <option value="bash">Bash</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="tool-status">Status</label>
+                        <select id="tool-status" name="status">
+                            <?php foreach (tool_allowed_statuses() as $allowedStatus): ?>
+                                <option value="<?= htmlspecialchars($allowedStatus) ?>"><?= htmlspecialchars($allowedStatus) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="tool-source-type">Source Type</label>
+                        <select id="tool-source-type" name="source_type">
+                            <?php foreach (tool_allowed_source_types() as $allowedSourceType): ?>
+                                <option value="<?= htmlspecialchars($allowedSourceType) ?>"><?= htmlspecialchars($allowedSourceType) ?></option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                 </div>
@@ -710,14 +898,32 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                     <label for="tool-code">Code</label>
                     <textarea id="tool-code" name="code" required placeholder="// Your tool code here..."></textarea>
                 </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="tool-replaces-tool-id">Replaces Tool ID (optional)</label>
+                        <input type="number" id="tool-replaces-tool-id" name="replaces_tool_id" min="1" placeholder="42">
+                    </div>
+                    <div class="form-group">
+                        <label for="tool-lineage-key">Lineage Key (optional)</label>
+                        <input type="text" id="tool-lineage-key" name="lineage_key" placeholder="weather-tools">
+                    </div>
+                </div>
                 <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="tool-approved" name="is_approved" value="1" checked>
-                        Approved for execution
-                    </label>
+                    <label for="tool-review-notes">Review Notes</label>
+                    <textarea id="tool-review-notes" name="review_notes" style="min-height:90px" placeholder="Why this draft exists, what it replaces, or why it was approved, rejected, or superseded."></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="tool-approved-by">Approved By</label>
+                        <input type="text" id="tool-approved-by" disabled placeholder="Set automatically when status becomes approved">
+                    </div>
+                    <div class="form-group">
+                        <label for="tool-approved-at">Approved At</label>
+                        <input type="text" id="tool-approved-at" disabled placeholder="Set automatically when status becomes approved">
+                    </div>
                 </div>
                 <div class="btn-group">
-                    <button type="submit" class="btn btn-primary">Save Tool</button>
+                    <button type="submit" class="btn btn-primary">Save Tool Record</button>
                     <button type="button" class="btn btn-secondary" onclick="closeEditor()">Cancel</button>
                 </div>
             </form>
@@ -734,7 +940,7 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
         }
         
         async function loadFromJson() {
-            if (!confirm('Load tools from JSON file? This will update existing tools with same name.')) return;
+            if (!confirm('Load tools from the default JSON file? Existing tool records with the same name will be updated, but status remains governed by the lifecycle contract.')) return;
             try {
                 const resp = await fetch('?', {
                     method: 'POST',
@@ -743,7 +949,7 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                 });
                 const data = await resp.json();
                 if (data.ok) {
-                    toast(`Loaded ${data.loaded} tools`, 'success');
+                    toast(`Loaded ${data.loaded} tool records`, 'success');
                     setTimeout(() => location.reload(), 1000);
                 } else {
                     toast(data.error || 'Load failed', 'error');
@@ -754,22 +960,31 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
         }
         
         function openEditor(tool) {
-            document.getElementById('editor-title').textContent = tool ? 'Edit Tool' : 'Add Tool';
+            document.getElementById('editor-title').textContent = tool ? 'Edit Tool Record' : 'Add Tool Draft';
             document.getElementById('tool-name').value = tool?.name || '';
-            document.getElementById('tool-name').disabled = !!tool;
+            document.getElementById('tool-name').readOnly = !!tool;
+            document.getElementById('tool-name').style.opacity = tool ? '0.75' : '1';
             document.getElementById('tool-description').value = tool?.description || '';
             document.getElementById('tool-keywords').value = tool?.keywords || '';
             document.getElementById('tool-language').value = tool?.language || 'php';
+            document.getElementById('tool-status').value = tool?.status || (tool?.is_ai_generated ? 'draft' : 'registered');
+            document.getElementById('tool-source-type').value = tool?.source_type || (tool?.is_ai_generated ? 'ai' : 'human');
             document.getElementById('tool-params').value = typeof tool?.parameters_schema === 'string' 
                 ? tool.parameters_schema 
                 : JSON.stringify(tool?.parameters_schema || {}, null, 2);
             document.getElementById('tool-code').value = tool?.code || '';
-            document.getElementById('tool-approved').checked = tool ? !!tool.is_approved : true;
+            document.getElementById('tool-replaces-tool-id').value = tool?.replaces_tool_id || '';
+            document.getElementById('tool-lineage-key').value = tool?.lineage_key || '';
+            document.getElementById('tool-review-notes').value = tool?.review_notes || '';
+            document.getElementById('tool-approved-by').value = tool?.approved_by || '';
+            document.getElementById('tool-approved-at').value = tool?.approved_at || '';
             document.getElementById('editor-modal').classList.add('active');
         }
         
         function closeEditor() {
             document.getElementById('editor-modal').classList.remove('active');
+            document.getElementById('tool-name').readOnly = false;
+            document.getElementById('tool-name').style.opacity = '1';
         }
         
         async function editTool(name) {
@@ -791,9 +1006,6 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
             const form = document.getElementById('tool-form');
             const formData = new FormData(form);
             formData.append('action', 'upsert');
-            if (!document.getElementById('tool-approved').checked) {
-                formData.set('is_approved', '0');
-            }
             
             try {
                 const resp = await fetch('?', {
@@ -802,7 +1014,7 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                 });
                 const data = await resp.json();
                 if (data.ok) {
-                    toast(`Tool ${data.action}: ${data.name}`, 'success');
+                    toast(`Tool ${data.action}: ${data.name} (${data.status || 'saved'})`, 'success');
                     closeEditor();
                     setTimeout(() => location.reload(), 500);
                 } else {
@@ -814,7 +1026,7 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
         }
         
         async function deleteTool(name) {
-            if (!confirm(`Delete tool "${name}"? This cannot be undone.`)) return;
+            if (!confirm(`Delete tool record "${name}"? This cannot be undone.`)) return;
             try {
                 const resp = await fetch('?', {
                     method: 'POST',
@@ -834,18 +1046,22 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
         }
         
         async function toggleApproval(name) {
+            return setStatus(name, 'approved');
+        }
+
+        async function setStatus(name, status) {
             try {
                 const resp = await fetch('?', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: 'action=toggle_approval&name=' + encodeURIComponent(name)
+                    body: 'action=set_status&name=' + encodeURIComponent(name) + '&status=' + encodeURIComponent(status)
                 });
                 const data = await resp.json();
                 if (data.ok) {
-                    toast(`Tool ${data.is_approved ? 'approved' : 'revoked'}`, 'success');
+                    toast(`Tool status set to ${data.status}`, 'success');
                     setTimeout(() => location.reload(), 500);
                 } else {
-                    toast(data.error || 'Toggle failed', 'error');
+                    toast(data.error || 'Status update failed', 'error');
                 }
             } catch (e) {
                 toast('Error: ' + e.message, 'error');
@@ -870,7 +1086,7 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                 return;
             }
             
-            if (!confirm(`Import tools from "${file.name}"? This will update existing tools with same name.`)) {
+            if (!confirm(`Import tool records from "${file.name}"? Existing records with the same name will be updated, but approval still depends on status.`)) {
                 e.target.value = '';
                 return;
             }
@@ -886,7 +1102,7 @@ $jsonExists = is_file(TOOLS_JSON_PATH);
                 });
                 const data = await resp.json();
                 if (data.ok) {
-                    toast(`Imported ${data.loaded} tools`, 'success');
+                    toast(`Imported ${data.loaded} tool records`, 'success');
                     if (data.errors.length > 0) {
                         console.warn('Import errors:', data.errors);
                     }
