@@ -6,6 +6,7 @@ import argparse
 from typing import Optional
 
 from agent_common import DEFAULT_PRIVATE_ROOT, colorize, tty_supports_color
+from agent_input import AgentSessionLogger, PASTE_EDIT_MIN_LINES, build_session_history_prompt, load_prompt_from_file, open_in_editor, read_user_input
 from agent_runtime import AliveAgent
 
 try:
@@ -146,10 +147,15 @@ def help_block() -> str:
             "--------------",
             "/help       Show this help",
             "/hello      Run the startup greeting bypass against the model",
-            "/status     Show current backend, model, paths, and runtime settings",
-            "/debug      Show whether debug mode is on",
-            "/debug on   Enable debug logging to stderr",
-            "/debug off  Disable debug logging to stderr",
+            "/paste      Enter multiline paste mode, finish with /end or cancel with /cancel",
+            "/compose    Open $EDITOR to compose the next prompt",
+            "/edit-paste on|off  Review large multiline pastes in $EDITOR before sending",
+            "/read PATH  Load a local file into the next prompt",
+            "/load PATH  Same as /read",
+            "/session    Show the current session log file",
+            "/sessions-history on|off  Include current and recent session history in prompts",
+            "/status     Show current backend, model, paths, and runtime settings",            
+            "/debug      on/off debug logging to stderr",            
             "/models     List models returned by the active backend",
             "/search     Show active search URL status from agent tools settings",
             "/memory     Show agent memory DB status",
@@ -157,6 +163,7 @@ def help_block() -> str:
             "/tools      Show DB-backed agent tools status",
             "/tools list List approved DB-backed tool names",
             "/clear      Redraw the banner",
+            "/cancel     Cancel multiline paste mode",
             "/exit       Quit the shell",
         ]
     )
@@ -174,6 +181,12 @@ def handle_slash_command(agent: AliveAgent, command: str, debug: bool) -> Option
             print("\n" + agent.startup_greeting())
         except Exception as e:
             print("\nStartup greeting failed: %s" % e)
+        return debug
+    if lower == "/paste":
+        print("\nPaste mode: enter multiple lines, then use /end to submit or /cancel to discard.")
+        return debug
+    if lower == "/cancel":
+        print("\nNothing to cancel outside paste mode.")
         return debug
     if lower == "/status":
         print("\n" + status_block(agent, debug))
@@ -294,44 +307,179 @@ def handle_slash_command(agent: AliveAgent, command: str, debug: bool) -> Option
     return debug
 
 
+def read_multiline_query(debug_enabled: bool) -> Optional[str]:
+    print("\nPaste mode: finish with /end or discard with /cancel.")
+    lines = []
+    while True:
+        try:
+            line = input("... ").rstrip("\n")
+        except EOFError:
+            print("\nPaste cancelled.")
+            return ""
+        except KeyboardInterrupt:
+            print("\nPaste cancelled.")
+            return ""
+        normalized = line.strip().lower()
+        if normalized == "/cancel":
+            print("Paste discarded.")
+            return ""
+        if normalized == "/end":
+            break
+        lines.append(line)
+    text = "\n".join(lines).strip()
+    if text == "":
+        print("No pasted content submitted.")
+        return ""
+    return text
+
+
 def interactive_loop(agent: AliveAgent, debug: bool, startup_greeting_enabled: bool = False, startup_greeting_prompt: str = "") -> int:
     debug_enabled = debug
+    sessions_history_enabled = False
+    edit_paste_enabled = bool(getattr(agent, "edit_paste_enabled", False))
+    edit_paste_min_lines = int(getattr(agent, "edit_paste_min_lines", PASTE_EDIT_MIN_LINES) or PASTE_EDIT_MIN_LINES)
+    if edit_paste_min_lines < 2:
+        edit_paste_min_lines = PASTE_EDIT_MIN_LINES
+    editor_command = str(getattr(agent, "editor_command", "") or "")
+    editor_timeout_seconds = int(getattr(agent, "editor_timeout_seconds", 300) or 300)
+    if editor_timeout_seconds < 1:
+        editor_timeout_seconds = 300
+    edit_paste_strip_comment_lines = bool(getattr(agent, "edit_paste_strip_comment_lines", True))
+    session = AgentSessionLogger(
+        getattr(agent, "profile_name", "") if hasattr(agent, "profile_name") else "",
+        getattr(agent, "profile_mode", "") if hasattr(agent, "profile_mode") else "shell",
+    )
     setup_readline()
     print(banner_block(agent, debug_enabled))
+    print("\nSession log: %s" % str(session.path))
     if startup_greeting_enabled:
         try:
             greeting = agent.startup_greeting(startup_greeting_prompt)
             if greeting.strip() != "":
                 print("\n" + greeting)
+                session.log("assistant_startup_greeting", {"text": greeting})
         except Exception as e:
             print("\nStartup greeting failed: %s" % e)
+            session.log("startup_greeting_error", {"error": str(e)})
     while True:
         try:
             prompt = "\nagent"
             if debug_enabled:
                 prompt += " [debug]"
             prompt += "> "
-            user_q = input(prompt).strip()
+            user_q = read_user_input(
+                prompt,
+                edit_multiline=edit_paste_enabled,
+                edit_min_lines=edit_paste_min_lines,
+                editor_command=editor_command,
+                editor_timeout_seconds=editor_timeout_seconds,
+                edit_strip_comment_lines=edit_paste_strip_comment_lines,
+                archive_source="edit_paste",
+            )
         except (EOFError, KeyboardInterrupt):
             print("\nbye")
+            session.log("session_end", {"reason": "eof_or_interrupt"})
             return 0
 
+        user_q = user_q.strip()
         if not user_q:
             continue
         if user_q.lower() in ("exit", "quit"):
             print("bye")
+            session.log("session_end", {"reason": "quit"})
             return 0
+        if user_q.lower() == "/paste":
+            pasted = read_multiline_query(debug_enabled)
+            if not pasted:
+                session.log("paste_cancelled", {})
+                continue
+            session.log("user_input_paste", {"chars": len(pasted)})
+            user_q = pasted
+        elif user_q.lower() == "/session":
+            print("\nSession log: %s" % str(session.path))
+            session.log("session_path_requested", {"path": str(session.path)})
+            continue
+        elif user_q.lower() == "/compose":
+            composed = open_in_editor(
+                "",
+                editor_command=editor_command,
+                timeout_seconds=editor_timeout_seconds,
+                strip_comment_lines=edit_paste_strip_comment_lines,
+                archive_source="compose",
+            )
+            if not composed.get("ok"):
+                print("\nCompose cancelled.")
+                session.log("compose_cancelled", composed)
+                continue
+            user_q = str(composed.get("content", "") or "").strip()
+            if user_q == "":
+                print("\nCompose cancelled.")
+                session.log("compose_cancelled", {"error": "empty_compose"})
+                continue
+            if composed.get("archived_path"):
+                print("\nSaved compose copy: %s" % str(composed.get("archived_path")))
+            session.log("compose_submitted", {"chars": len(user_q), "archived_path": str(composed.get("archived_path", "") or "")})
+        elif user_q.lower() == "/edit-paste":
+            print("\nEdit-paste is %s." % ("on" if edit_paste_enabled else "off"))
+            print("Large multiline pastes open $EDITOR when %d+ lines are detected." % edit_paste_min_lines)
+            session.log("edit_paste_state_requested", {"enabled": edit_paste_enabled, "min_lines": edit_paste_min_lines, "editor_command": editor_command, "editor_timeout_seconds": editor_timeout_seconds})
+            continue
+        elif user_q.lower() in ("/edit-paste on", "/edit-paste off"):
+            edit_paste_enabled = user_q.lower().endswith("on")
+            print("\nEdit-paste %s." % ("enabled" if edit_paste_enabled else "disabled"))
+            print("Large multiline pastes open $EDITOR when %d+ lines are detected." % edit_paste_min_lines)
+            session.log("edit_paste_toggled", {"enabled": edit_paste_enabled, "min_lines": edit_paste_min_lines, "editor_command": editor_command, "editor_timeout_seconds": editor_timeout_seconds})
+            continue
+        elif user_q.lower() == "/sessions-history":
+            print("\nSessions history is %s." % ("on" if sessions_history_enabled else "off"))
+            print("Current session file: %s" % str(session.path))
+            session.log("sessions_history_state_requested", {"enabled": sessions_history_enabled, "path": str(session.path)})
+            continue
+        elif user_q.lower() in ("/sessions-history on", "/sessions-history off"):
+            sessions_history_enabled = user_q.lower().endswith("on")
+            print("\nSessions history %s." % ("enabled" if sessions_history_enabled else "disabled"))
+            print("Current session file: %s" % str(session.path))
+            session.log("sessions_history_toggled", {"enabled": sessions_history_enabled, "path": str(session.path)})
+            continue
+        elif user_q.lower().startswith("/read ") or user_q.lower().startswith("/load "):
+            parts = user_q.split(" ", 1)
+            path_text = parts[1] if len(parts) > 1 else ""
+            loaded = load_prompt_from_file(path_text)
+            if not loaded.get("ok"):
+                print("\nFile load failed: %s" % str(loaded.get("error", "unknown_error")))
+                if loaded.get("path"):
+                    print("Path: %s" % str(loaded.get("path")))
+                session.log("file_load_error", loaded)
+                continue
+            print("\nLoaded file into prompt: %s" % str(loaded.get("path")))
+            if loaded.get("truncated"):
+                print("Warning: file was truncated for prompt size.")
+            session.log(
+                "file_loaded_into_prompt",
+                {"path": str(loaded.get("path", "")), "truncated": bool(loaded.get("truncated", False))},
+            )
+            user_q = str(loaded.get("prompt", "") or "")
         if user_q.startswith("/"):
+            session.log("slash_command", {"command": user_q})
             cmd_result = handle_slash_command(agent, user_q, debug_enabled)
             if cmd_result is None:
                 print("bye")
+                session.log("session_end", {"reason": "slash_exit"})
                 return 0
             debug_enabled = cmd_result
             continue
 
         try:
-            answer = agent.run(user_q, debug=debug_enabled)
+            prompt_text = user_q
+            if sessions_history_enabled:
+                history_text = build_session_history_prompt(session.path, include_current=True, max_sessions=3)
+                if history_text != "":
+                    prompt_text = history_text + "\n\nCurrent request:\n" + user_q
+            session.log("user_prompt", {"text": user_q[:4000], "chars": len(user_q), "sessions_history_enabled": sessions_history_enabled})
+            answer = agent.run(prompt_text, debug=debug_enabled)
             print("\n" + answer)
+            session.log("assistant_response", {"text": answer[:4000], "chars": len(answer)})
         except Exception as e:
             print("Agent error: %s" % e)
             print("Hint: run with --list-models or use /models to inspect models on the active backend.")
+            session.log("agent_error", {"error": str(e), "prompt": user_q[:1000]})

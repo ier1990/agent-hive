@@ -49,6 +49,11 @@ def main() -> int:
     agent.task_name = str(profile.get("task_name", "") or "")
     agent.profile_mode = str(profile.get("mode", "") or "")
     agent.profile_description = str(profile.get("description", "") or "")
+    agent.edit_paste_enabled = bool(profile.get("edit_paste_enabled", False))
+    agent.edit_paste_min_lines = int(profile.get("edit_paste_min_lines", 5) or 5)
+    agent.editor_command = str(profile.get("editor_command", "") or "")
+    agent.editor_timeout_seconds = int(profile.get("editor_timeout_seconds", 300) or 300)
+    agent.edit_paste_strip_comment_lines = bool(profile.get("edit_paste_strip_comment_lines", True))
 
     def build_query_text(raw_query: str) -> str:
         base_query = str(raw_query or "").strip()

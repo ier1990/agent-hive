@@ -21,7 +21,7 @@ This directory contains the split Python agent stack behind the admin AI shell.
   - Handles model calls, tool execution, memory storage, DB-backed approved tools, preloaded context, and the think -> tool -> think loop.
 - `agent_shell.py`
   - Interactive shell UX.
-  - Provides banner/status/help output, slash commands, readline history, and optional startup greeting warmup.
+  - Provides banner/status/help output, slash commands, readline history, optional startup greeting warmup, and optional editor review for large pasted prompts.
 - `default_agent.json`
   - Versioned default profile template for the Python agent.
   - Includes the startup greeting defaults used unless private config overrides them.
@@ -61,6 +61,7 @@ Rules worth knowing:
 - Agent memory DB: `/web/private/db/memory/agent_ai_memory.db`
 - Default notes DB: `/web/private/db/memory/human_notes.db`
 - Shell history file: `/web/private/logs/agent_shell_history.log`
+- Composer/editor prompt archive: `/web/private/logs/agent_composer/`
 - Temp execution directory: `/web/private/tmp`
 
 ## Built-in tools
@@ -135,6 +136,17 @@ This means the model gets a first-pass notes/code snapshot before it decides whe
 
 - `/help`
 - `/hello`
+- `/paste`
+- `/compose`
+- `/edit-paste`
+- `/edit-paste on`
+- `/edit-paste off`
+- `/read PATH`
+- `/load PATH`
+- `/session`
+- `/sessions-history`
+- `/sessions-history on`
+- `/sessions-history off`
 - `/status`
 - `/debug`
 - `/debug on`
@@ -151,6 +163,17 @@ This means the model gets a first-pass notes/code snapshot before it decides whe
 - `/quit`
 
 Typing `exit` or `quit` without a slash also leaves the shell.
+
+Input helpers worth knowing:
+
+- normal rapid multiline paste is merged into one logical prompt
+- `/paste` enters explicit multiline mode and finishes with `/end` or `/cancel`
+- `/compose` opens `$EDITOR` immediately so you can draft, paste, and clean up a prompt before sending
+- `/read PATH` and `/load PATH` load a local file into the next prompt
+- `/session` shows the current session log path
+- `/sessions-history on` prepends recent session history into the next request context
+- `/edit-paste on` opens large pasted blocks in `$EDITOR` for review before sending
+- editor-reviewed prompts are archived under `/web/private/logs/agent_composer/` for replaying or testing with smaller models later
 
 ## Startup greeting
 
@@ -221,6 +244,11 @@ Profile JSON now supports role-oriented fields for cron and worker-style use:
 - `default_query`
 - `task_prompt`
 - `timeout_seconds`
+- `edit_paste_enabled`
+- `edit_paste_min_lines`
+- `editor_command`
+- `editor_timeout_seconds`
+- `edit_paste_strip_comment_lines`
 
 Useful behavior:
 
@@ -230,6 +258,12 @@ Useful behavior:
 - `interactive: false` makes cron-style profiles cleaner
 - `write_report` plus `report_target` can persist single-shot output to a file
 - `memory_enabled` can disable agent memory without needing a separate tool settings file
+- `edit_paste_enabled: true` makes the shell open large multiline pastes in your editor before they are sent
+- `edit_paste_min_lines` controls how many pasted lines trigger editor review
+- `editor_command` can be a multi-word command such as `code --wait`
+- `editor_command` can include `{file_path}` when the editor requires the path in a specific position, such as `nano -w -l {file_path}`
+- `editor_timeout_seconds` limits how long the shell waits for the editor to close
+- `edit_paste_strip_comment_lines` removes `#` helper lines from the reviewed temp file before sending
 
 Example profile files:
 

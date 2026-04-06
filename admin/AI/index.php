@@ -60,6 +60,7 @@ $runtime_files = [
     'Agent memory DB' => '/web/private/db/memory/agent_ai_memory.db',
     'Default notes DB' => '/web/private/db/memory/human_notes.db',
     'Shell history file' => '/web/private/logs/agent_shell_history.log',
+    'Composer/editor prompt archive' => '/web/private/logs/agent_composer/',
     'Temp execution directory' => '/web/private/tmp',
 ];
 
@@ -77,6 +78,17 @@ $built_in_tools = [
 $shell_commands = [
     '/help',
     '/hello',
+    '/paste',
+    '/compose',
+    '/edit-paste',
+    '/edit-paste on',
+    '/edit-paste off',
+    '/read PATH',
+    '/load PATH',
+    '/session',
+    '/sessions-history',
+    '/sessions-history on',
+    '/sessions-history off',
     '/status',
     '/debug',
     '/debug on',
@@ -126,8 +138,45 @@ $quick_start = [
     'Check the active backend and model with /status.',
     'Use /models if you need to confirm which models the current backend exposes.',
     'Ask a normal request and let the agent use notes, code search, and read_code before web search.',
+    'Use /read PATH or /load PATH when you want to load a markdown or code file into one prompt instead of pasting it.',
+    'Use /compose when you already know you want to build or clean up a longer prompt in your editor.',
+    'Turn on /edit-paste if you want large multiline pastes to open in your editor before they are sent.',
     'Use /hello to test the startup greeting path without entering the full tool loop.',
     'Edit agent_boot.md first when behavior tuning is mostly prompt-related rather than runtime-related.',
+];
+
+$profile_fields = [
+    'profile_name',
+    'task_name',
+    'description',
+    'mode',
+    'model',
+    'base_url',
+    'api_key',
+    'api_key_env',
+    'max_steps',
+    'step_budget',
+    'temperature',
+    'startup_greeting_enabled',
+    'interactive',
+    'output_mode',
+    'write_report',
+    'report_type',
+    'report_target',
+    'notes_db',
+    'code_root',
+    'boot_prompt_path',
+    'tool_settings_path',
+    'memory_enabled',
+    'allowed_tools',
+    'default_query',
+    'task_prompt',
+    'timeout_seconds',
+    'edit_paste_enabled',
+    'edit_paste_min_lines',
+    'editor_command',
+    'editor_timeout_seconds',
+    'edit_paste_strip_comment_lines',
 ];
 ?><!DOCTYPE html>
 <html lang="en">
@@ -545,6 +594,30 @@ $quick_start = [
           </div>
         </div>
       </div>
+      <div class="subtext">
+        Normal rapid multiline paste is merged into one prompt. Use <code>/paste</code> for explicit multiline entry,
+        <code>/compose</code> to open your editor immediately,
+        <code>/read PATH</code> to load a file into the next prompt, and <code>/edit-paste on</code> when you want large pasted blocks
+        to open in your editor for review before they are sent. Editor-reviewed prompts are archived under
+        <code>/web/private/logs/agent_composer/</code>.
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Profile Fields</h2>
+      <div class="chips">
+        <?php foreach ($profile_fields as $field): ?>
+          <div class="chip"><code><?= h($field) ?></code></div>
+        <?php endforeach; ?>
+      </div>
+      <div class="subtext">
+        The shell now supports config-driven editor review for large pasted prompts.
+        Set <code>edit_paste_enabled</code>, <code>edit_paste_min_lines</code>, <code>editor_command</code>,
+        <code>editor_timeout_seconds</code>, and <code>edit_paste_strip_comment_lines</code> in
+        <code>admin/AI/default_agent.json</code>, <code>/web/private/agent.json</code>, or a <code>--config-file</code> profile.
+        <code>editor_command</code> supports multi-word commands and an optional <code>{file_path}</code> placeholder, for example
+        <code>nano -w -l {file_path}</code>.
+      </div>
     </section>
 
     <section class="card">
@@ -563,6 +636,15 @@ agent&gt; /models</pre>
 
 The agent should prefer notes/code context and
 read_code before falling back to web search.</pre>
+        </div>
+        <div class="mini-card">
+          <div class="kicker">Load a File or Review a Large Paste</div>
+          <pre>agent&gt; /read admin/AI/AI_tools.md
+
+agent&gt; /compose
+
+agent&gt; /edit-paste on
+agent&gt; paste a longer draft here...</pre>
         </div>
         <div class="mini-card warn">
           <div class="kicker">Single-Shot Mode</div>

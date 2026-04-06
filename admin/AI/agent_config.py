@@ -269,6 +269,11 @@ def default_agent_config() -> Dict[str, Any]:
         "allowed_tools": [],
         "default_query": "",
         "task_prompt": "",
+        "edit_paste_enabled": False,
+        "edit_paste_min_lines": 5,
+        "editor_command": "",
+        "editor_timeout_seconds": 300,
+        "edit_paste_strip_comment_lines": True,
     }
 
 
@@ -355,6 +360,17 @@ def load_agent_profile(config_path_text: str = "") -> Dict[str, Any]:
     out["report_target"] = str(out.get("report_target", "") or "")
     out["default_query"] = str(out.get("default_query", "") or "")
     out["task_prompt"] = str(out.get("task_prompt", "") or "")
+    out["edit_paste_enabled"] = bool_value(out.get("edit_paste_enabled", False), False)
+    edit_paste_min_lines = int(out.get("edit_paste_min_lines", 5) or 5)
+    if edit_paste_min_lines < 2:
+        edit_paste_min_lines = 2
+    out["edit_paste_min_lines"] = edit_paste_min_lines
+    out["editor_command"] = str(out.get("editor_command", "") or "")
+    editor_timeout_seconds = int(out.get("editor_timeout_seconds", 300) or 300)
+    if editor_timeout_seconds < 1:
+        editor_timeout_seconds = 300
+    out["editor_timeout_seconds"] = editor_timeout_seconds
+    out["edit_paste_strip_comment_lines"] = bool_value(out.get("edit_paste_strip_comment_lines", True), True)
     timeout_seconds = int(out.get("timeout_seconds", 120) or 120)
     if timeout_seconds < 1:
         timeout_seconds = 120

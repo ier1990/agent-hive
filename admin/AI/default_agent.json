@@ -29,6 +29,12 @@
   "allowed_tools": [],
   "default_query": "",
   "task_prompt": "",
+  "edit_paste_enabled": true,
+  "edit_paste_min_lines": 5,
+  "editor_command": "nano -w -l {file_path}",
+  "editor_timeout_seconds": 300,
+  "edit_paste_strip_comment_lines": true,
   "startup_greeting_enabled": true,
-  "startup_greeting_prompt": "Say a short greeting and introduce yourself in 2 short sentences."
+  "startup_greeting_prompt_default": "Say a short greeting and introduce yourself in 2 short sentences.",
+  "startup_greeting_prompt": "AgentHive active. I've indexed the workspace and am ready to help you build. What's the first objective?"
 }
