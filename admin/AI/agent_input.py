@@ -27,7 +27,36 @@ PASTE_EDIT_MIN_LINES = 5
 EDITOR_TIMEOUT_SECONDS = 300
 
 
-def save_composer_snapshot(content: str, source: str = "editor") -> str:
+def composer_metadata_header(content: str, source: str = "editor", metadata: Optional[Dict[str, Any]] = None) -> str:
+    meta = dict(metadata or {})
+    source_text = str(source or meta.get("source", "editor") or "editor").strip() or "editor"
+    created_at = now_iso()
+    first_line = ""
+    for line in str(content or "").splitlines():
+        stripped = line.strip()
+        if stripped:
+            first_line = stripped[:160]
+            break
+
+    fields = [
+        ("composer_meta_version", "1"),
+        ("created_at", created_at),
+        ("source", source_text),
+        ("profile", str(meta.get("profile_name", "") or "")),
+        ("mode", str(meta.get("mode", "") or "")),
+        ("model", str(meta.get("model", "") or "")),
+        ("session_id", str(meta.get("session_id", "") or "")),
+        ("first_line", first_line),
+    ]
+
+    lines = []
+    for key, value in fields:
+        text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+        lines.append("# %s: %s" % (key, text))
+    return "\n".join(lines) + "\n\n"
+
+
+def save_composer_snapshot(content: str, source: str = "editor", metadata: Optional[Dict[str, Any]] = None) -> str:
     COMPOSER_LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
     safe_source = str(source or "editor").strip().lower().replace(" ", "_").replace("/", "_")
@@ -35,10 +64,94 @@ def save_composer_snapshot(content: str, source: str = "editor") -> str:
         safe_source = "editor"
     path = COMPOSER_LOG_DIR / ("%s_%s.md" % (stamp, safe_source))
     try:
-        path.write_text(str(content or ""), encoding="utf-8")
+        body = str(content or "")
+        path.write_text(composer_metadata_header(body, source, metadata) + body, encoding="utf-8")
     except Exception:
         return ""
     return str(path)
+
+
+def parse_composer_archive(path: Path) -> Dict[str, Any]:
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return {"ok": False, "error": "file_read_failed", "detail": str(e), "path": str(path)}
+
+    metadata = {}
+    body_lines = []
+    in_header = True
+    for line in raw.splitlines():
+        if in_header and line.startswith("# "):
+            key_value = line[2:].split(":", 1)
+            if len(key_value) == 2:
+                key = key_value[0].strip()
+                value = key_value[1].strip()
+                if key != "":
+                    metadata[key] = value
+            continue
+        if in_header and line.strip() == "":
+            in_header = False
+            continue
+        in_header = False
+        body_lines.append(line)
+
+    body = "\n".join(body_lines).strip()
+    return {"ok": True, "path": str(path), "metadata": metadata, "content": body}
+
+
+def list_composer_archives(limit: int = 10) -> Dict[str, Any]:
+    COMPOSER_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        paths = sorted(COMPOSER_LOG_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception as e:
+        return {"ok": False, "error": "archive_list_failed", "detail": str(e), "path": str(COMPOSER_LOG_DIR)}
+
+    items = []
+    for path in paths[: max(1, int(limit or 10))]:
+        parsed = parse_composer_archive(path)
+        if not parsed.get("ok"):
+            continue
+        metadata = parsed.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        items.append(
+            {
+                "path": str(path),
+                "created_at": str(metadata.get("created_at", "") or ""),
+                "source": str(metadata.get("source", "") or ""),
+                "profile": str(metadata.get("profile", "") or ""),
+                "mode": str(metadata.get("mode", "") or ""),
+                "model": str(metadata.get("model", "") or ""),
+                "session_id": str(metadata.get("session_id", "") or ""),
+                "first_line": str(metadata.get("first_line", "") or ""),
+            }
+        )
+    return {"ok": True, "path": str(COMPOSER_LOG_DIR), "items": items}
+
+
+def newest_composer_archive() -> Dict[str, Any]:
+    listing = list_composer_archives(1)
+    if not listing.get("ok"):
+        return listing
+    items = listing.get("items", [])
+    if not isinstance(items, list) or not items:
+        return {"ok": False, "error": "archive_not_found", "path": str(COMPOSER_LOG_DIR)}
+    path = str(items[0].get("path", "") or "")
+    if path == "":
+        return {"ok": False, "error": "archive_not_found", "path": str(COMPOSER_LOG_DIR)}
+    return load_composer_archive(path)
+
+
+def load_composer_archive(path_text: str) -> Dict[str, Any]:
+    try:
+        path = resolve_allowed_path(path_text)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+    if not path.exists() or not path.is_file():
+        return {"ok": False, "error": "file_not_found", "path": str(path)}
+
+    return parse_composer_archive(path)
 
 
 def open_in_editor(
@@ -48,6 +161,7 @@ def open_in_editor(
     timeout_seconds: int = EDITOR_TIMEOUT_SECONDS,
     strip_comment_lines: bool = True,
     archive_source: str = "editor",
+    archive_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     editor = str(editor_command or os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano").strip() or "nano"
     uses_placeholder = ("{file_path}" in editor)
@@ -90,7 +204,7 @@ def open_in_editor(
         cleaned = "\n".join(cleaned_lines).strip()
         if cleaned == "":
             return {"ok": False, "cancelled": True, "error": "editor_empty_result", "editor": editor, "path": str(path)}
-        archived_path = save_composer_snapshot(cleaned, archive_source)
+        archived_path = save_composer_snapshot(cleaned, archive_source, archive_metadata)
         return {"ok": True, "content": cleaned, "editor": editor, "path": str(path), "archived_path": archived_path}
     except subprocess.TimeoutExpired:
         return {"ok": False, "cancelled": True, "error": "editor_timeout", "editor": editor, "path": str(path)}
@@ -111,6 +225,7 @@ def read_user_input(
     editor_timeout_seconds: int = EDITOR_TIMEOUT_SECONDS,
     edit_strip_comment_lines: bool = True,
     archive_source: str = "edit_paste",
+    archive_metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Read one logical user prompt, including rapid multiline paste bursts."""
     try:
@@ -163,11 +278,13 @@ def read_user_input(
             timeout_seconds=editor_timeout_seconds,
             strip_comment_lines=edit_strip_comment_lines,
             archive_source=archive_source,
+            archive_metadata=archive_metadata,
         )
         if edited.get("ok"):
             return str(edited.get("content", "") or "").strip()
         print("[editor %s - using original pasted content]" % str(edited.get("error", "cancelled")))
     return result
+
 
 def now_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"

@@ -6,7 +6,7 @@ import argparse
 from typing import Optional
 
 from agent_common import DEFAULT_PRIVATE_ROOT, colorize, tty_supports_color
-from agent_input import AgentSessionLogger, PASTE_EDIT_MIN_LINES, build_session_history_prompt, load_prompt_from_file, open_in_editor, read_user_input
+from agent_input import AgentSessionLogger, PASTE_EDIT_MIN_LINES, build_session_history_prompt, list_composer_archives, load_composer_archive, load_prompt_from_file, newest_composer_archive, open_in_editor, read_user_input
 from agent_runtime import AliveAgent
 
 try:
@@ -149,6 +149,9 @@ def help_block() -> str:
             "/hello      Run the startup greeting bypass against the model",
             "/paste      Enter multiline paste mode, finish with /end or cancel with /cancel",
             "/compose    Open $EDITOR to compose the next prompt",
+            "/compose-last  Reopen the newest composer archive in $EDITOR",
+            "/compose-load PATH  Reopen a composer archive or local file in $EDITOR",
+            "/composer-history  List recent composer archives",
             "/edit-paste on|off  Review large multiline pastes in $EDITOR before sending",
             "/read PATH  Load a local file into the next prompt",
             "/load PATH  Same as /read",
@@ -349,6 +352,12 @@ def interactive_loop(agent: AliveAgent, debug: bool, startup_greeting_enabled: b
         getattr(agent, "profile_name", "") if hasattr(agent, "profile_name") else "",
         getattr(agent, "profile_mode", "") if hasattr(agent, "profile_mode") else "shell",
     )
+    composer_metadata = {
+        "profile_name": str(getattr(agent, "profile_name", "") or ""),
+        "mode": str(getattr(agent, "profile_mode", "") or ""),
+        "model": str(getattr(agent, "model", "") or ""),
+        "session_id": session.session_id,
+    }
     setup_readline()
     print(banner_block(agent, debug_enabled))
     print("\nSession log: %s" % str(session.path))
@@ -375,6 +384,7 @@ def interactive_loop(agent: AliveAgent, debug: bool, startup_greeting_enabled: b
                 editor_timeout_seconds=editor_timeout_seconds,
                 edit_strip_comment_lines=edit_paste_strip_comment_lines,
                 archive_source="edit_paste",
+                archive_metadata=composer_metadata,
             )
         except (EOFError, KeyboardInterrupt):
             print("\nbye")
@@ -406,6 +416,7 @@ def interactive_loop(agent: AliveAgent, debug: bool, startup_greeting_enabled: b
                 timeout_seconds=editor_timeout_seconds,
                 strip_comment_lines=edit_paste_strip_comment_lines,
                 archive_source="compose",
+                archive_metadata=composer_metadata,
             )
             if not composed.get("ok"):
                 print("\nCompose cancelled.")
@@ -419,6 +430,113 @@ def interactive_loop(agent: AliveAgent, debug: bool, startup_greeting_enabled: b
             if composed.get("archived_path"):
                 print("\nSaved compose copy: %s" % str(composed.get("archived_path")))
             session.log("compose_submitted", {"chars": len(user_q), "archived_path": str(composed.get("archived_path", "") or "")})
+        elif user_q.lower() == "/composer-history":
+            archives = list_composer_archives(10)
+            if not archives.get("ok"):
+                print("\nComposer history failed: %s" % str(archives.get("error", "unknown_error")))
+                if archives.get("path"):
+                    print("Path: %s" % str(archives.get("path")))
+                session.log("composer_history_error", archives)
+                continue
+            items = archives.get("items", [])
+            if not isinstance(items, list) or not items:
+                print("\nNo composer archives found.")
+                session.log("composer_history_listed", {"count": 0, "path": str(archives.get("path", "") or "")})
+                continue
+            print("\nComposer history:")
+            for index, item in enumerate(items, 1):
+                if not isinstance(item, dict):
+                    continue
+                line = "%d. %s" % (index, str(item.get("path", "") or ""))
+                created_at = str(item.get("created_at", "") or "")
+                source = str(item.get("source", "") or "")
+                if created_at or source:
+                    line += " [%s%s]" % (created_at, (" | " + source) if source else "")
+                print(line)
+                detail_parts = []
+                for key in ("profile", "mode", "model"):
+                    value = str(item.get(key, "") or "")
+                    if value:
+                        detail_parts.append("%s=%s" % (key, value))
+                first_line = str(item.get("first_line", "") or "")
+                if detail_parts:
+                    print("  %s" % " | ".join(detail_parts))
+                if first_line:
+                    print("  %s" % first_line[:180])
+            session.log("composer_history_listed", {"count": len(items), "path": str(archives.get("path", "") or "")})
+            continue
+        elif user_q.lower() == "/compose-last":
+            loaded_archive = newest_composer_archive()
+            if not loaded_archive.get("ok"):
+                print("\nCompose-last failed: %s" % str(loaded_archive.get("error", "archive_not_found")))
+                if loaded_archive.get("path"):
+                    print("Path: %s" % str(loaded_archive.get("path")))
+                session.log("compose_last_error", loaded_archive)
+                continue
+            composed = open_in_editor(
+                str(loaded_archive.get("content", "") or ""),
+                editor_command=editor_command,
+                timeout_seconds=editor_timeout_seconds,
+                strip_comment_lines=edit_paste_strip_comment_lines,
+                archive_source="compose_reuse",
+                archive_metadata=composer_metadata,
+            )
+            if not composed.get("ok"):
+                print("\nCompose-last cancelled.")
+                session.log("compose_last_cancelled", composed)
+                continue
+            user_q = str(composed.get("content", "") or "").strip()
+            if user_q == "":
+                print("\nCompose-last cancelled.")
+                session.log("compose_last_cancelled", {"error": "empty_compose"})
+                continue
+            if composed.get("archived_path"):
+                print("\nSaved compose copy: %s" % str(composed.get("archived_path")))
+            session.log(
+                "compose_last_submitted",
+                {
+                    "chars": len(user_q),
+                    "from_path": str(loaded_archive.get("path", "") or ""),
+                    "archived_path": str(composed.get("archived_path", "") or ""),
+                },
+            )
+        elif user_q.lower().startswith("/compose-load "):
+            parts = user_q.split(" ", 1)
+            path_text = parts[1] if len(parts) > 1 else ""
+            loaded_archive = load_composer_archive(path_text)
+            if not loaded_archive.get("ok"):
+                print("\nCompose-load failed: %s" % str(loaded_archive.get("error", "unknown_error")))
+                if loaded_archive.get("path"):
+                    print("Path: %s" % str(loaded_archive.get("path")))
+                session.log("compose_load_error", loaded_archive)
+                continue
+            composed = open_in_editor(
+                str(loaded_archive.get("content", "") or ""),
+                editor_command=editor_command,
+                timeout_seconds=editor_timeout_seconds,
+                strip_comment_lines=edit_paste_strip_comment_lines,
+                archive_source="compose_reuse",
+                archive_metadata=composer_metadata,
+            )
+            if not composed.get("ok"):
+                print("\nCompose-load cancelled.")
+                session.log("compose_load_cancelled", composed)
+                continue
+            user_q = str(composed.get("content", "") or "").strip()
+            if user_q == "":
+                print("\nCompose-load cancelled.")
+                session.log("compose_load_cancelled", {"error": "empty_compose"})
+                continue
+            if composed.get("archived_path"):
+                print("\nSaved compose copy: %s" % str(composed.get("archived_path")))
+            session.log(
+                "compose_load_submitted",
+                {
+                    "chars": len(user_q),
+                    "from_path": str(loaded_archive.get("path", "") or ""),
+                    "archived_path": str(composed.get("archived_path", "") or ""),
+                },
+            )
         elif user_q.lower() == "/edit-paste":
             print("\nEdit-paste is %s." % ("on" if edit_paste_enabled else "off"))
             print("Large multiline pastes open $EDITOR when %d+ lines are detected." % edit_paste_min_lines)

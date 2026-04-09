@@ -138,6 +138,9 @@ This means the model gets a first-pass notes/code snapshot before it decides whe
 - `/hello`
 - `/paste`
 - `/compose`
+- `/compose-last`
+- `/compose-load PATH`
+- `/composer-history`
 - `/edit-paste`
 - `/edit-paste on`
 - `/edit-paste off`
@@ -169,11 +172,15 @@ Input helpers worth knowing:
 - normal rapid multiline paste is merged into one logical prompt
 - `/paste` enters explicit multiline mode and finishes with `/end` or `/cancel`
 - `/compose` opens `$EDITOR` immediately so you can draft, paste, and clean up a prompt before sending
+- `/compose-last` reopens the newest archived composer draft in `$EDITOR`
+- `/compose-load PATH` opens a composer archive or other local file in `$EDITOR` and sends the edited result
+- `/composer-history` lists recent archived composer drafts with metadata
 - `/read PATH` and `/load PATH` load a local file into the next prompt
 - `/session` shows the current session log path
 - `/sessions-history on` prepends recent session history into the next request context
 - `/edit-paste on` opens large pasted blocks in `$EDITOR` for review before sending
 - editor-reviewed prompts are archived under `/web/private/logs/agent_composer/` for replaying or testing with smaller models later
+- composer archives include comment metadata for `created_at`, `source`, `profile`, `mode`, `model`, `session_id`, and `first_line`
 
 ## Startup greeting
 

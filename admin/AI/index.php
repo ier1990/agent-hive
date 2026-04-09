@@ -80,6 +80,9 @@ $shell_commands = [
     '/hello',
     '/paste',
     '/compose',
+    '/compose-last',
+    '/compose-load PATH',
+    '/composer-history',
     '/edit-paste',
     '/edit-paste on',
     '/edit-paste off',
@@ -140,6 +143,7 @@ $quick_start = [
     'Ask a normal request and let the agent use notes, code search, and read_code before web search.',
     'Use /read PATH or /load PATH when you want to load a markdown or code file into one prompt instead of pasting it.',
     'Use /compose when you already know you want to build or clean up a longer prompt in your editor.',
+    'Use /composer-history and /compose-last when you want to reuse earlier drafts instead of starting from scratch.',
     'Turn on /edit-paste if you want large multiline pastes to open in your editor before they are sent.',
     'Use /hello to test the startup greeting path without entering the full tool loop.',
     'Edit agent_boot.md first when behavior tuning is mostly prompt-related rather than runtime-related.',
@@ -597,9 +601,11 @@ $profile_fields = [
       <div class="subtext">
         Normal rapid multiline paste is merged into one prompt. Use <code>/paste</code> for explicit multiline entry,
         <code>/compose</code> to open your editor immediately,
+        <code>/composer-history</code> and <code>/compose-last</code> to reuse earlier drafts,
         <code>/read PATH</code> to load a file into the next prompt, and <code>/edit-paste on</code> when you want large pasted blocks
         to open in your editor for review before they are sent. Editor-reviewed prompts are archived under
-        <code>/web/private/logs/agent_composer/</code>.
+        <code>/web/private/logs/agent_composer/</code> with comment metadata for timestamp, source, profile, mode, model,
+        session, and first prompt line.
       </div>
     </section>
 
@@ -645,6 +651,12 @@ agent&gt; /compose
 
 agent&gt; /edit-paste on
 agent&gt; paste a longer draft here...</pre>
+        </div>
+        <div class="mini-card alt">
+          <div class="kicker">Reuse an Archived Draft</div>
+          <pre>agent&gt; /composer-history
+agent&gt; /compose-last
+agent&gt; /compose-load /web/private/logs/agent_composer/...</pre>
         </div>
         <div class="mini-card warn">
           <div class="kicker">Single-Shot Mode</div>

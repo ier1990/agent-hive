@@ -15,6 +15,7 @@ The browser should make local file work fast, while keeping AI actions explicit 
 - current project root
 - configured `code_root`
 - current working directory inside the project
+- current /web/private directory outside the project
 
 From there, each key press should dispatch one of two action types:
 
@@ -32,7 +33,7 @@ Keep v1 small and useful:
 
 - `F1` summarize selected file
 - `F3` view selected file
-- `F4` edit selected file
+- `F4` edit selected file with default editor
 - `F10` exit browser and return to `agent>`
 
 That is enough to make `/mc` feel valuable without building a full TUI platform all at once.
