@@ -530,6 +530,22 @@ CREATE TABLE IF NOT EXISTS rewrites (
   rewrite TEXT,
   diff TEXT
 );
+CREATE TABLE IF NOT EXISTS audits (
+  action_id INTEGER PRIMARY KEY,
+  findings TEXT
+);
+CREATE TABLE IF NOT EXISTS tests (
+  action_id INTEGER PRIMARY KEY,
+  strategy TEXT
+);
+CREATE TABLE IF NOT EXISTS docs (
+  action_id INTEGER PRIMARY KEY,
+  documentation TEXT
+);
+CREATE TABLE IF NOT EXISTS refactors (
+  action_id INTEGER PRIMARY KEY,
+  suggestions TEXT
+);
 CREATE VIEW IF NOT EXISTS vw_last_actions AS
   SELECT a.*, f.path FROM actions a
   JOIN files f ON f.id = a.file_id
@@ -1025,7 +1041,7 @@ def run_once(cfg: dict) -> None:
                             # Wrap as JSON
                             summary_text = json.dumps({"raw": text}, ensure_ascii=False)
                         conn.execute("INSERT OR REPLACE INTO summaries(action_id,summary) VALUES(?,?)", (action_id, summary_text))
-                    else:
+                    elif action == "rewrite":
                         # rewrite: try to extract code block; fallback to full text
                         body = text
                         blk = extract_first_codeblock(text)
@@ -1038,6 +1054,30 @@ def run_once(cfg: dict) -> None:
                             "INSERT OR REPLACE INTO rewrites(action_id,rewrite,diff) VALUES(?,?,?)",
                             (action_id, new_text, diff),
                         )
+                    elif action == "audit":
+                        conn.execute(
+                            "INSERT OR REPLACE INTO audits(action_id,findings) VALUES(?,?)",
+                            (action_id, text),
+                        )
+                    elif action == "test":
+                        conn.execute(
+                            "INSERT OR REPLACE INTO tests(action_id,strategy) VALUES(?,?)",
+                            (action_id, text),
+                        )
+                    elif action == "docs":
+                        conn.execute(
+                            "INSERT OR REPLACE INTO docs(action_id,documentation) VALUES(?,?)",
+                            (action_id, text),
+                        )
+                    elif action == "refactor":
+                        conn.execute(
+                            "INSERT OR REPLACE INTO refactors(action_id,suggestions) VALUES(?,?)",
+                            (action_id, text),
+                        )
+                    else:
+                        status = "error"
+                        err = "Unsupported action type: {0}".format(action)
+                        conn.execute("UPDATE actions SET status=?, error=? WHERE id=?", (status, err, action_id))
                 else:
                     logging.warning(f"Action failed for {path}: {err}")
 

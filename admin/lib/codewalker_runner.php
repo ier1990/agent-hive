@@ -22,7 +22,7 @@ function cw_cwdb_pdo(string $dbPath): PDO
 
 function cw_cwdb_init(PDO $pdo): void
 {
-    // Mirrors the schema used by admin/cron.hourly/codewalker.py
+    // Authoritative CodeWalker results schema used by the PHP CLI and admin UI.
     $pdo->exec('PRAGMA journal_mode=WAL');
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS files (

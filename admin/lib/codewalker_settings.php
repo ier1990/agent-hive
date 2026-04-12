@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-// CodeWalker settings stored in SQLite, mirroring admin/cron.hourly/codewalker.py behavior.
+// CodeWalker settings stored in SQLite for the PHP CLI/admin runner; Python can read the same DB.
 
 function cw_settings_db_path(): string
 {
@@ -11,7 +11,7 @@ function cw_settings_db_path(): string
 
 function cw_config_template(): array
 {
-    // Keep this aligned with admin/cron.hourly/codewalker.py CONFIG_TEMPLATE, plus write_root for the admin UI.
+    // Keep shared defaults aligned across runners, plus write_root for the admin UI.
     return [
         'name' => 'CodeWalker',
         'mode' => 'que',

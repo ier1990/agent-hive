@@ -1,7 +1,7 @@
 # CodeWalker Architecture
 
 ## Overview
-CodeWalker is a LAN‑first AI code analysis system that scans files, runs a selected action (summarize, rewrite, audit, test, docs, refactor), and stores results in SQLite. It is implemented in PHP (admin UI + runner) and Python (CLI/cron runner). The admin UI reads the same results database and provides a review/apply workflow for rewrites.
+CodeWalker is a LAN‑first AI code analysis system that scans files, runs a selected action (summarize, rewrite, audit, test, docs, refactor), and stores results in SQLite. The active path in this repo is PHP-first: the admin UI and the CLI both use the PHP runner. A Python runner still exists as a compatibility/legacy path and targets the same databases. The admin UI reads the same results database and provides a review/apply workflow for rewrites.
 
 Key characteristics:
 - PHP 7.3 compatibility (no 7.4+ features).
@@ -23,23 +23,26 @@ Responsibilities:
 - Exposes a small “queue” for targeted file runs.
 
 ### PHP Runner
+- [admin/codewalker_cli.php](admin/codewalker_cli.php) is the main CLI entrypoint used to run CodeWalker from shell/cron.
 - [admin/lib/codewalker_runner.php](admin/lib/codewalker_runner.php) executes actions and persists results.
 - [admin/lib/codewalker_settings.php](admin/lib/codewalker_settings.php) loads/merges settings from the settings DB.
 - [admin/lib/codewalker_helpers.php](admin/lib/codewalker_helpers.php) provides hashing, file selection, and utility helpers.
 
 Responsibilities:
+- Provides the current CLI/cron execution path.
 - Initializes results DB schema if missing.
 - Scans files, deduplicates by content hash, selects action by configured distribution.
 - Sends prompt to the configured AI backend.
 - Writes results to action‑specific tables.
 
-### Python CLI / Cron Runner
+### Python Runner (Compatibility / Legacy)
 - [src/scripts/codewalker.py](src/scripts/codewalker.py)
 
 Responsibilities:
 - Bootstraps settings DB (if missing) and reads config.
 - Initializes results DB schema using its embedded DDL.
-- Scans files and stores results in SQLite.
+- Can scan files and store results in SQLite when invoked directly.
+- Is not the primary execution path when using [admin/codewalker_cli.php](admin/codewalker_cli.php).
 
 ## Runtime Data Stores
 
@@ -60,8 +63,8 @@ Primary loaders:
 - Path (default): /web/private/db/inbox/codewalker.db
 - Used by PHP admin UI and both runners.
 
-#### Core tables (PHP runner schema)
-Created in `cw_cwdb_init()` in [admin/lib/codewalker_runner.php](admin/lib/codewalker_runner.php):
+#### Core tables (authoritative schema)
+Created in `cw_cwdb_init()` in [admin/lib/codewalker_runner.php](admin/lib/codewalker_runner.php), which is the schema path used by the PHP CLI and admin-triggered runs:
 - `files` — tracked files with hashes
 - `runs` — run metadata
 - `actions` — action records (summarize, rewrite, audit, test, docs, refactor)
@@ -78,11 +81,11 @@ Created in `cw_cwdb_init()` in [admin/lib/codewalker_runner.php](admin/lib/codew
 Created in [admin/codewalker.php](admin/codewalker.php) for the UI workflow:
 - `applied_rewrites` — audit trail for “Apply rewrite” actions
 
-#### Python DDL scope (current)
-The embedded DDL in [src/scripts/codewalker.py](src/scripts/codewalker.py) currently defines:
-- `files`, `runs`, `actions`, `summaries`, `rewrites`, `queued_files`, `vw_last_actions`
+#### Python DDL scope
+The embedded DDL in [src/scripts/codewalker.py](src/scripts/codewalker.py) has been updated to match the PHP result tables:
+- `files`, `runs`, `actions`, `summaries`, `rewrites`, `audits`, `tests`, `docs`, `refactors`, `queued_files`, `vw_last_actions`
 
-It does **not** create `audits`, `tests`, `docs`, or `refactors` tables. This is a known mismatch with the PHP runner schema. If Python is used for these action types, add the missing tables or adjust storage logic.
+The Python runner remains secondary, but it now aligns with the same action-specific storage layout if it is used.
 
 ## Data Flow
 
@@ -101,7 +104,7 @@ It does **not** create `audits`, `tests`, `docs`, or `refactors` tables. This is
 
 4. **Persist results**
    - Record in `actions`.
-   - Result stored in action‑specific table (PHP) or `summaries`/`rewrites` (Python, current behavior).
+   - Result stored in the matching action‑specific table.
 
 5. **Review/apply**
    - Admin UI loads results and provides “apply rewrite” flow.
@@ -110,6 +113,7 @@ It does **not** create `audits`, `tests`, `docs`, or `refactors` tables. This is
 ## Key Functions and APIs
 
 PHP runner:
+- `admin/codewalker_cli.php` — primary CLI entrypoint.
 - `cw_cwdb_init()` — initializes results DB schema.
 - `cw_run_on_file()` — executes a single action on a file.
 - `cw_pick_random_action()` — weighted action selection.
@@ -149,14 +153,15 @@ Python runner:
 
 1. **Defaults** live in [admin/lib/codewalker_settings.php](admin/lib/codewalker_settings.php) and [src/scripts/codewalker.py](src/scripts/codewalker.py).
 2. **Settings DB** values override defaults.
-3. **Runtime overrides** (environment or CLI flags) may further override values (Python).
+3. **Runtime overrides** (environment or CLI flags) may further override values when supported by the runner.
 4. **Active AI profile** integration (PHP) is mediated via [lib/ai_bootstrap.php](lib/ai_bootstrap.php) when enabled.
 
 ## Gotchas / Operational Notes
 
-- **Schema creation**: the admin UI only creates `applied_rewrites` and `queued_files`. The main schema is created by the runners. If the results DB is deleted, run the PHP runner or Python CLI once to initialize it.
+- **Primary runner path**: [admin/codewalker_cli.php](admin/codewalker_cli.php) plus [admin/lib/codewalker_runner.php](admin/lib/codewalker_runner.php) is the current authoritative execution path in this repo.
+- **Schema creation**: the main schema is created by the PHP runner via `cw_cwdb_init()`. If the results DB is deleted, running [admin/codewalker_cli.php](admin/codewalker_cli.php) is the normal way to recreate it. The admin UI also calls `cw_cwdb_init()` before querying results.
 - **PHP 7.3 compatibility**: avoid PHP 7.4+ features in all CodeWalker PHP files.
-- **Python multi‑action mismatch**: the Python DDL does not include `audits`, `tests`, `docs`, or `refactors`. The PHP runner writes to those tables. If Python is used for these actions, extend its DDL and insert logic.
+- **Python status**: [src/scripts/codewalker.py](src/scripts/codewalker.py) is best treated as a secondary/legacy-compatible runner unless your deployment explicitly invokes it.
 - **Write safety**: rewrite application is restricted to `write_root` from settings, and compares `file_hash` unless force‑applied.
 - **Empty responses**: both runners mark empty AI responses as errors; admin UI will show stored content fallback if Markdown rendering fails.
 - **Auth required**: admin routes require `auth_require_admin()`; ensure admin session is valid when loading CodeWalker.
