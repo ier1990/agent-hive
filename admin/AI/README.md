@@ -76,6 +76,9 @@ Rules worth knowing:
 - `agent_tool_list`
 - `agent_tool_run`
 - `read_code`
+- `bash_propose`
+- `bash_proposal_list`
+- `bash_proposal_status`
 
 Important behavior:
 
@@ -83,6 +86,9 @@ Important behavior:
 - `read_code` is restricted to paths under the configured `code_root`.
 - `search` uses the configured Searx endpoint and returns structured results plus a text summary.
 - Memory schema is auto-created on first use if the memory DB does not exist yet.
+- `bash_propose` stores a human-reviewable shell proposal with operator and tutorial summaries instead of executing immediately.
+- `bash_proposal_list` lists recent bash proposals so the agent can discover IDs and statuses.
+- `bash_proposal_status` reads back the approval/execution state for a previously proposed shell command.
 
 ## Admin-managed tools contract
 

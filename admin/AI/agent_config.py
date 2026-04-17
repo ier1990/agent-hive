@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from agent_common import AGENT_BOOT_PATH, AGENT_DB_PATH, AGENT_MEMORY_DB_PATH, AGENT_TOOL_SETTINGS_PATH, AI_SETTINGS_DB_PATH, APP_ROOT, DEFAULT_AGENT_CONFIG_PATH, DEFAULT_NOTES_DB, PRIVATE_AGENT_CONFIG_PATH, PRIVATE_ENV_PATH
+from agent_common import AGENT_BOOT_PATH, AGENT_DB_PATH, AGENT_MEMORY_DB_PATH, AGENT_TOOL_SETTINGS_PATH, AI_SETTINGS_DB_PATH, APP_ROOT, DEFAULT_AGENT_CONFIG_PATH, DEFAULT_NOTES_DB, DEFAULT_PRIVATE_ROOT, PRIVATE_AGENT_CONFIG_PATH, PRIVATE_ENV_PATH
 
 
 def ai_base_ensure_v1(base_url: str) -> str:
@@ -200,6 +200,20 @@ def default_tool_settings() -> Dict[str, Any]:
             "autoload_limit": 10,
             "default_search_limit": 8,
             "max_write_length": 4000,
+        },
+        "bash": {
+            "enabled": True,
+            "db_path": str(AGENT_DB_PATH),
+            "max_command_length": 1200,
+            "proposal_limit": 100,
+            "execution_timeout_seconds": 30,
+            "allowed_roots": [
+                str(APP_ROOT),
+                str(DEFAULT_PRIVATE_ROOT),
+                str(DEFAULT_PRIVATE_ROOT / "scripts"),
+                str(DEFAULT_PRIVATE_ROOT / "logs"),
+                "/tmp",
+            ],
         }
     }
 

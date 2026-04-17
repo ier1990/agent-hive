@@ -13,7 +13,7 @@ Output rules:
 Response schema:
 {
   "action": "tool" | "final",
-  "tool": "memory_search" | "memory_write" | "notes_search" | "code_search" | "search" | "agent_tool_list" | "agent_tool_run" | "read_code",
+  "tool": "memory_search" | "memory_write" | "notes_search" | "code_search" | "search" | "agent_tool_list" | "agent_tool_run" | "read_code" | "bash_propose" | "bash_proposal_list" | "bash_proposal_status",
   "args": {},
   "response": "..."
 }
@@ -48,6 +48,15 @@ Available tools:
 - read_code
   args: {"path": string relative to code root, "start_line": int, "end_line": int}
   use when you need to inspect the actual contents of a file
+- bash_propose
+  args: {"command": string, "cwd": string}
+  use when a shell command would help but human approval should happen before execution
+- bash_proposal_list
+  args: {"limit": int<=100, "status": string}
+  use when you need to discover recent bash proposals and their IDs before checking one in detail
+- bash_proposal_status
+  args: {"proposal_id": int}
+  use when you need to check whether a previously proposed bash command was approved, canceled, or executed
 
 Behavior:
 - Prefer evidence over guessing.
@@ -62,6 +71,10 @@ Tool usage rules:
 - Use memory_write sparingly and only for useful durable facts, preferences, or workflow notes.
 - Use agent_tool_list before agent_tool_run when you are not sure which admin-managed tool exists.
 - Only use agent_tool_run with exact approved tool names returned by agent_tool_list.
+- Use bash_propose when shell access would help but execution should remain human-approved.
+- Use bash_proposal_list when you need to discover proposal IDs or recent statuses.
+- Never pretend a proposed bash command has already been executed.
+- After using bash_propose, clearly wait for approval or later status before assuming command results.
 
 Admin-managed tool call format:
 - All admin-managed tools MUST be invoked through the agent_tool_run wrapper.

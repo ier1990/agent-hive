@@ -19,10 +19,99 @@ if (strpos($file, '..') !== false || strpos($file, '/') !== false) {
 
 $file_path = $logs_path . DIRECTORY_SEPARATOR . $file;
 
+function h($value) {
+    return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+function safe_tail_lines($path, $lineCount) {
+    $lineCount = max(1, (int)$lineCount);
+    if (!is_file($path) || !is_readable($path)) {
+        return false;
+    }
+
+    $fp = @fopen($path, 'rb');
+    if (!$fp) {
+        return false;
+    }
+
+    $buffer = '';
+    $chunkSize = 8192;
+    $linesFound = 0;
+
+    if (@fseek($fp, 0, SEEK_END) !== 0) {
+        fclose($fp);
+        return false;
+    }
+
+    $position = @ftell($fp);
+    if ($position === false) {
+        fclose($fp);
+        return false;
+    }
+
+    while ($position > 0 && $linesFound <= $lineCount) {
+        $read = min($chunkSize, $position);
+        $position -= $read;
+        if (@fseek($fp, $position, SEEK_SET) !== 0) {
+            break;
+        }
+        $chunk = @fread($fp, $read);
+        if ($chunk === false) {
+            break;
+        }
+        $buffer = $chunk . $buffer;
+        $linesFound = substr_count($buffer, "\n");
+    }
+
+    fclose($fp);
+
+    $parts = preg_split("/\r\n|\n|\r/", $buffer);
+    if (!is_array($parts)) {
+        return false;
+    }
+
+    $tail = array_slice($parts, -$lineCount);
+    return implode("\n", $tail);
+}
+
+function safe_log_line_count($path, $sizeBytes) {
+    if (!is_file($path) || !is_readable($path)) {
+        return ['value' => 'unreadable', 'note' => 'File is not readable yet'];
+    }
+
+    if ($sizeBytes > 5 * 1024 * 1024) {
+        return ['value' => 'skipped', 'note' => 'Skipped line count for large log'];
+    }
+
+    $fp = @fopen($path, 'rb');
+    if (!$fp) {
+        return ['value' => 'unreadable', 'note' => 'Could not open file'];
+    }
+
+    $count = 0;
+    while (!feof($fp)) {
+        $line = fgets($fp);
+        if ($line === false) {
+            if (!feof($fp)) {
+                fclose($fp);
+                return ['value' => 'error', 'note' => 'Read error while counting lines'];
+            }
+            break;
+        }
+        $count++;
+    }
+    fclose($fp);
+
+    return ['value' => $count, 'note' => ''];
+}
+
 // Handle view/tail actions
 if ($action === 'view' && $file) {
     if (!file_exists($file_path)) {
         die("File not found");
+    }
+    if (!is_readable($file_path)) {
+        die("File is not readable yet.");
     }
     
     header('Content-Type: text/plain');
@@ -34,11 +123,17 @@ if ($action === 'tail' && $file) {
     if (!file_exists($file_path)) {
         die("File not found");
     }
+    if (!is_readable($file_path)) {
+        die("File is not readable yet.");
+    }
     
     header('Content-Type: text/plain');
-    $content = file($file_path);
-    $tail_lines = array_slice($content, -$lines);
-    echo implode('', $tail_lines);
+    $tail = safe_tail_lines($file_path, $lines);
+    if ($tail === false) {
+        echo "Unable to read tail for this file.\n";
+    } else {
+        echo $tail;
+    }
     exit;
 }
 
@@ -100,31 +195,45 @@ function formatBytes($bytes, $precision = 2) {
                     <th>Size</th>
                     <th>Modified</th>
                     <th>Lines</th>
+                    <th>Status</th>
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($log_files as $log_file): 
                     $full_path = $logs_path . DIRECTORY_SEPARATOR . $log_file;
-                    $size = filesize($full_path);
-                    $mtime = filemtime($full_path);
-                    $line_count = count(file($full_path));
+                    $size = @filesize($full_path);
+                    $mtime = @filemtime($full_path);
+                    $size = ($size === false) ? 0 : $size;
+                    $mtime = ($mtime === false) ? 0 : $mtime;
+                    $line_meta = safe_log_line_count($full_path, $size);
+                    $line_count = $line_meta['value'];
+                    $status_note = $line_meta['note'];
+                    $readable = is_readable($full_path);
                 ?>
                 <tr>
-                    <td><strong><?php echo htmlspecialchars($log_file); ?></strong></td>
+                    <td><strong><?php echo h($log_file); ?></strong></td>
                     <td><?php echo formatBytes($size); ?></td>
-                    <td><?php echo date('Y-m-d H:i:s', $mtime); ?></td>
-                    <td><?php echo number_format($line_count); ?></td>
+                    <td><?php echo $mtime > 0 ? date('Y-m-d H:i:s', $mtime) : 'unknown'; ?></td>
+                    <td>
+                        <?php echo is_int($line_count) ? number_format($line_count) : h($line_count); ?>
+                    </td>
+                    <td><?php echo $status_note !== '' ? h($status_note) : ($readable ? 'ok' : 'unreadable'); ?></td>
                     <td class="actions">
-                        <a href="?action=view&file=<?php echo urlencode($log_file); ?>" target="_blank">View Full</a>
-                        <a href="?action=tail&file=<?php echo urlencode($log_file); ?>&lines=50" target="_blank">Tail 50</a>
-                        <a href="?action=tail&file=<?php echo urlencode($log_file); ?>&lines=100" target="_blank">Tail 100</a>
-                        <a href="?action=tail&file=<?php echo urlencode($log_file); ?>&lines=500" target="_blank">Tail 500</a>
+                        <?php if ($readable): ?>
+                            <a href="?action=view&file=<?php echo urlencode($log_file); ?>" target="_blank">View Full</a>
+                            <a href="?action=tail&file=<?php echo urlencode($log_file); ?>&lines=50" target="_blank">Tail 50</a>
+                            <a href="?action=tail&file=<?php echo urlencode($log_file); ?>&lines=100" target="_blank">Tail 100</a>
+                            <a href="?action=tail&file=<?php echo urlencode($log_file); ?>&lines=500" target="_blank">Tail 500</a>
+                        <?php else: ?>
+                            <span class="path">Waiting for readable perms</span>
+                        <?php endif; ?>
                     </td>
                 </tr>
                 <?php endforeach; ?>
             </tbody>
         </table>
     <?php endif; ?>
+    Bottom of file.
 </body>
 </html>

@@ -124,6 +124,191 @@ Suggested responsibilities:
 - `tool_propose_revision`: create a successor draft linked to an existing tool
 - `tool_test_preview`: generate examples or test vectors for review
 
+## Bash proposal tool
+
+One especially useful built-in is a guarded bash proposal tool.
+
+The idea:
+
+- agent does not execute shell directly
+- agent proposes a bash command string
+- system runs a deterministic safety pass over it
+- system produces two summaries:
+  - `operator_summary`
+  - `tutorial_summary`
+- human chooses `approve` or `cancel`
+- only then does a separate executor run the command
+
+That keeps shell access useful without making the runtime reckless.
+
+Current contract:
+
+- `bash_propose`
+- `bash_proposal_list`
+- `bash_proposal_status`
+
+Current responsibilities:
+
+- `bash_propose`: create a reviewable proposal row with summaries, risk, cwd, and metadata
+- `bash_proposal_list`: list recent proposals so the agent can discover IDs and statuses
+- `bash_proposal_status`: inspect one proposal in detail after approval or execution
+
+Current human review surface:
+
+- `/admin/admin_AI_Bash.php`
+
+Current admin actions:
+
+- `approve`
+- `cancel`
+- `delete`
+- `execute`
+
+Important implementation note:
+
+- the agent currently proposes and inspects bash commands
+- the human approves and executes them through the admin UI
+- execution is intentionally not exposed as a direct built-in tool yet
+
+## Bash proposal shape
+
+Recommended proposal payload:
+
+```json
+{
+  "tool": "bash",
+  "command": "rg -n \"api_guard\" /web/html",
+  "cwd": "/web/html",
+  "operator_summary": "Search recursively for api_guard usages under /web/html with line numbers.",
+  "tutorial_summary": {
+    "purpose": "Find where api_guard is used in the codebase.",
+    "tokens": [
+      {"part": "rg", "meaning": "ripgrep, a fast recursive search tool"},
+      {"part": "-n", "meaning": "show matching line numbers"},
+      {"part": "\"api_guard\"", "meaning": "the text pattern to search for"},
+      {"part": "/web/html", "meaning": "directory to search"}
+    ],
+    "why_this_command": "Faster and cleaner than grep -R for code search.",
+    "expected_output": "Matching file paths with line numbers.",
+    "safer_alternative": "Search a narrower directory if you want less output."
+  },
+  "risk": "low",
+  "needs_approval": true,
+  "writes": [],
+  "reads": ["/web/html"],
+  "network": false,
+  "sudo": false
+}
+```
+
+This is useful both as approval UI data and as a growing bash tutorial library.
+
+Live implementation notes:
+
+- proposals are stored in `bash_proposals` inside `/web/private/db/agent_tools.db`
+- each proposal carries operator summary, tutorial summary, risk, and metadata JSON
+- execution stores exit code, stdout preview, stderr preview, and result JSON back onto the same row
+
+## Bash approval workflow
+
+Recommended flow:
+
+1. agent decides shell access would help
+2. agent proposes one command, not a whole hidden script
+3. deterministic guard parses and classifies the command
+4. UI shows:
+   - exact command
+   - operator summary
+   - tutorial summary
+   - risk level
+   - likely reads/writes/network use
+5. human selects `approve`, `cancel`, or `delete`
+6. if approved, human may later choose `execute`
+7. result is stored and can be read back through `bash_proposal_status`
+
+This should feel like a reviewable action card, not an invisible side effect.
+
+Practical agent loop:
+
+1. agent uses `bash_propose`
+2. human reviews proposal in `/admin/admin_AI_Bash.php`
+3. if the human approves and executes it, the agent can later call:
+   - `bash_proposal_list`
+   - `bash_proposal_status`
+4. agent then interprets the result
+
+## Bash tutorial value
+
+The tutorial side is not just nice-to-have.
+
+It helps users learn recurring command patterns from real work:
+
+- `rg -n`
+- `find`
+- `sed -n`
+- `tail -f`
+- `wc -l`
+- `sort`
+- `uniq -c`
+- `xargs`
+
+That means the bash tool is doing two jobs:
+
+- safe human-approved execution
+- practical shell teaching in context
+
+Recommended summary split:
+
+- `operator_summary`: one or two short sentences about what the command will do
+- `tutorial_summary`: a token-by-token explanation with expected output and rationale
+
+The UI can show operator summary by default and keep tutorial details collapsible.
+
+## Bash safety boundary
+
+The summary generator must not be the safety boundary.
+
+Safety should come from deterministic checks first.
+
+Examples of things to classify explicitly:
+
+- `rm`
+- `mv`
+- `chmod`
+- `chown`
+- `sudo`
+- shell redirection like `>` and `>>`
+- command chaining with `;`, `&&`, `||`
+- pipes
+- wildcard-heavy writes
+- network fetches
+- writes outside allowed roots
+
+AI can explain a command.
+AI should not be the only component deciding whether it is safe.
+
+## Bash v1 limits
+
+Current v1 limits:
+
+- require approval for every command
+- proposals are created by the agent, but execution is human-triggered
+- restrict working directories to configured allowed roots
+- log the exact proposed command and exact execution result
+- do not allow execution of a different command from the one approved
+- keep deterministic risk classification ahead of any AI explanation
+
+Possible allowed early patterns:
+
+- search
+- listing
+- file inspection
+- line counting
+- process inspection
+- simple git read-only inspection
+
+Then later, if the workflow earns trust, expand carefully into write-capable operations or direct post-approval execution hooks.
+
 ## Safety rules
 
 - AI drafts tools for human approval.
