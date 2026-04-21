@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from agent_common import AGENT_BOOT_PATH, AGENT_DB_PATH, AGENT_MEMORY_DB_PATH, AGENT_TOOL_SETTINGS_PATH, AI_SETTINGS_DB_PATH, APP_ROOT, DEFAULT_AGENT_CONFIG_PATH, DEFAULT_NOTES_DB, DEFAULT_PRIVATE_ROOT, PRIVATE_AGENT_CONFIG_PATH, PRIVATE_ENV_PATH
+from agent_common import AGENT_BASH_SETTINGS_PATH, AGENT_BOOT_PATH, AGENT_DB_PATH, AGENT_MEMORY_DB_PATH, AGENT_TOOL_SETTINGS_PATH, AI_SETTINGS_DB_PATH, APP_ROOT, DEFAULT_AGENT_CONFIG_PATH, DEFAULT_NOTES_DB, DEFAULT_PRIVATE_ROOT, PRIVATE_AGENT_BASH_SETTINGS_PATH, PRIVATE_AGENT_CONFIG_PATH, PRIVATE_ENV_PATH
 
 
 def ai_base_ensure_v1(base_url: str) -> str:
@@ -103,6 +103,101 @@ def load_ai_settings_raw() -> Dict[str, Any]:
         except Exception:
             out[key] = text
     return out
+
+
+def _load_json_dict(path: Path) -> Dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _resolve_bash_setting_value(value: Any) -> Any:
+    replacements = {
+        "__APP_ROOT__": str(APP_ROOT),
+        "__DEFAULT_PRIVATE_ROOT__": str(DEFAULT_PRIVATE_ROOT),
+        "__AGENT_DB_PATH__": str(AGENT_DB_PATH),
+    }
+    if isinstance(value, str):
+        out = value
+        for needle, repl in replacements.items():
+            out = out.replace(needle, repl)
+        return out
+    if isinstance(value, list):
+        return [_resolve_bash_setting_value(item) for item in value]
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            out[key] = _resolve_bash_setting_value(item)
+        return out
+    return value
+
+
+def load_bash_settings_defaults() -> Dict[str, Any]:
+    defaults = {
+        "enabled": True,
+        "read_only_enabled": True,
+        "db_path": str(AGENT_DB_PATH),
+        "max_command_length": 1200,
+        "proposal_limit": 100,
+        "execution_timeout_seconds": 30,
+        "max_output_bytes": 12000,
+        "allowed_commands": [
+            "pwd",
+            "ls",
+            "find",
+            "rg",
+            "grep",
+            "cat",
+            "sed",
+            "head",
+            "tail",
+            "wc",
+            "stat",
+            "file",
+        ],
+        "blocked_tokens": [
+            "|",
+            ";",
+            "&&",
+            "||",
+            ">",
+            ">>",
+            "<",
+            "sudo",
+            "curl",
+            "wget",
+            "ssh",
+            "scp",
+            "rsync",
+            "rm",
+            "mv",
+            "cp",
+            "chmod",
+            "chown",
+            "mkdir",
+            "rmdir",
+            "touch",
+        ],
+        "allowed_roots": [
+            str(APP_ROOT),
+            str(DEFAULT_PRIVATE_ROOT),
+            str(DEFAULT_PRIVATE_ROOT / "scripts"),
+            str(DEFAULT_PRIVATE_ROOT / "logs"),
+            "/tmp",
+        ],
+    }
+
+    versioned = _load_json_dict(AGENT_BASH_SETTINGS_PATH) if AGENT_BASH_SETTINGS_PATH.exists() else {}
+    private = _load_json_dict(PRIVATE_AGENT_BASH_SETTINGS_PATH) if PRIVATE_AGENT_BASH_SETTINGS_PATH.exists() else {}
+
+    for source in (versioned, private):
+        for key, value in source.items():
+            if value == "" or value is None:
+                continue
+            defaults[key] = _resolve_bash_setting_value(value)
+    return defaults
 
 
 def resolve_shared_ai_settings() -> Dict[str, Any]:
@@ -201,20 +296,7 @@ def default_tool_settings() -> Dict[str, Any]:
             "default_search_limit": 8,
             "max_write_length": 4000,
         },
-        "bash": {
-            "enabled": True,
-            "db_path": str(AGENT_DB_PATH),
-            "max_command_length": 1200,
-            "proposal_limit": 100,
-            "execution_timeout_seconds": 30,
-            "allowed_roots": [
-                str(APP_ROOT),
-                str(DEFAULT_PRIVATE_ROOT),
-                str(DEFAULT_PRIVATE_ROOT / "scripts"),
-                str(DEFAULT_PRIVATE_ROOT / "logs"),
-                "/tmp",
-            ],
-        }
+        "bash": load_bash_settings_defaults(),
     }
 
 

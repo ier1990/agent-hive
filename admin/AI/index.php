@@ -73,6 +73,7 @@ $built_in_tools = [
     'agent_tool_list',
     'agent_tool_run',
     'read_code',
+    'bash_read',
     'bash_propose',
     'bash_proposal_list',
     'bash_proposal_status',

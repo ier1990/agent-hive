@@ -143,12 +143,14 @@ That keeps shell access useful without making the runtime reckless.
 
 Current contract:
 
+- `bash_read`
 - `bash_propose`
 - `bash_proposal_list`
 - `bash_proposal_status`
 
 Current responsibilities:
 
+- `bash_read`: execute safe read-only shell inspection commands immediately under the configured allowlist and allowed roots
 - `bash_propose`: create a reviewable proposal row with summaries, risk, cwd, and metadata
 - `bash_proposal_list`: list recent proposals so the agent can discover IDs and statuses
 - `bash_proposal_status`: inspect one proposal in detail after approval or execution
@@ -205,16 +207,20 @@ This is useful both as approval UI data and as a growing bash tutorial library.
 
 Live implementation notes:
 
+- read-only shell policy now lives in `agent_bash.json` through keys like `read_only_enabled`, `allowed_commands`, `blocked_tokens`, `allowed_roots`, and `max_output_bytes`
 - proposals are stored in `bash_proposals` inside `/web/private/db/agent_tools.db`
 - each proposal carries operator summary, tutorial summary, risk, and metadata JSON
 - execution stores exit code, stdout preview, stderr preview, and result JSON back onto the same row
+- Python bash helpers now live in `admin/AI/agent_bash.py`
+- default bash settings now live in `admin/AI/agent_bash.json`
+- site-specific overrides can live in `/web/private/agent_bash.json`
 
 ## Bash approval workflow
 
 Recommended flow:
 
-1. agent decides shell access would help
-2. agent proposes one command, not a whole hidden script
+1. agent tries `bash_read` first for simple safe inspection commands
+2. if `bash_read` is blocked by policy, the agent proposes one command, not a whole hidden script
 3. deterministic guard parses and classifies the command
 4. UI shows:
    - exact command
@@ -230,12 +236,13 @@ This should feel like a reviewable action card, not an invisible side effect.
 
 Practical agent loop:
 
-1. agent uses `bash_propose`
-2. human reviews proposal in `/admin/admin_AI_Bash.php`
-3. if the human approves and executes it, the agent can later call:
+1. agent uses `bash_read` for safe read-only inspection when allowed
+2. if a command falls outside that policy, agent uses `bash_propose`
+3. human reviews proposal in `/admin/admin_AI_Bash.php`
+4. if the human approves and executes it, the agent can later call:
    - `bash_proposal_list`
    - `bash_proposal_status`
-4. agent then interprets the result
+5. agent then interprets the result
 
 ## Bash tutorial value
 
@@ -291,7 +298,7 @@ AI should not be the only component deciding whether it is safe.
 
 Current v1 limits:
 
-- require approval for every command
+- only allow immediate execution for configured read-only commands
 - proposals are created by the agent, but execution is human-triggered
 - restrict working directories to configured allowed roots
 - log the exact proposed command and exact execution result

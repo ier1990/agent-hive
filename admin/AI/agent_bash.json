@@ -1,0 +1,53 @@
+{
+  "enabled": true,
+  "read_only_enabled": true,
+  "db_path": "__AGENT_DB_PATH__",
+  "max_command_length": 1200,
+  "proposal_limit": 100,
+  "execution_timeout_seconds": 30,
+  "max_output_bytes": 12000,
+  "allowed_commands": [
+    "pwd",
+    "ls",
+    "find",
+    "rg",
+    "grep",
+    "cat",
+    "sed",
+    "head",
+    "tail",
+    "wc",
+    "stat",
+    "file"
+  ],
+  "blocked_tokens": [
+    "|",
+    ";",
+    "&&",
+    "||",
+    ">",
+    ">>",
+    "<",
+    "sudo",
+    "curl",
+    "wget",
+    "ssh",
+    "scp",
+    "rsync",
+    "rm",
+    "mv",
+    "cp",
+    "chmod",
+    "chown",
+    "mkdir",
+    "rmdir",
+    "touch"
+  ],
+  "allowed_roots": [
+    "__APP_ROOT__",
+    "__DEFAULT_PRIVATE_ROOT__",
+    "__DEFAULT_PRIVATE_ROOT__/scripts",
+    "__DEFAULT_PRIVATE_ROOT__/logs",
+    "/tmp"
+  ]
+}

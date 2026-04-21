@@ -7,6 +7,11 @@ function agent_bash_db_path(): string
     return PRIVATE_ROOT . '/db/agent_tools.db';
 }
 
+function agent_bash_settings_path(): string
+{
+    return PRIVATE_ROOT . '/agent_bash.json';
+}
+
 function agent_bash_tool_settings_path(): string
 {
     return PRIVATE_ROOT . '/agent_tools.json';
@@ -73,24 +78,34 @@ function agent_bash_load_settings(): array
         ],
     ];
 
-    $path = agent_bash_tool_settings_path();
-    if (!is_file($path) || !is_readable($path)) {
-        return $defaults;
-    }
-    $raw = @file_get_contents($path);
-    if (!is_string($raw) || trim($raw) === '') {
-        return $defaults;
-    }
-    $data = json_decode($raw, true);
-    if (!is_array($data) || !isset($data['bash']) || !is_array($data['bash'])) {
-        return $defaults;
-    }
-    $bash = $data['bash'];
-    foreach ($bash as $key => $value) {
-        if ($value === '' || $value === null) {
-            continue;
+    $directPath = agent_bash_settings_path();
+    if (is_file($directPath) && is_readable($directPath)) {
+        $raw = @file_get_contents($directPath);
+        $data = is_string($raw) ? json_decode($raw, true) : null;
+        if (is_array($data)) {
+            foreach ($data as $key => $value) {
+                if ($value === '' || $value === null) {
+                    continue;
+                }
+                $defaults[$key] = $value;
+            }
         }
-        $defaults[$key] = $value;
+    }
+
+    $legacyPath = agent_bash_tool_settings_path();
+    if (is_file($legacyPath) && is_readable($legacyPath)) {
+        $raw = @file_get_contents($legacyPath);
+        if (is_string($raw) && trim($raw) !== '') {
+            $data = json_decode($raw, true);
+            if (is_array($data) && isset($data['bash']) && is_array($data['bash'])) {
+                foreach ($data['bash'] as $key => $value) {
+                    if ($value === '' || $value === null) {
+                        continue;
+                    }
+                    $defaults[$key] = $value;
+                }
+            }
+        }
     }
     return $defaults;
 }
@@ -204,6 +219,7 @@ function agent_bash_execute(PDO $pdo, int $id, string $user): array
     $stderr = '';
     $start = microtime(true);
     $timedOut = false;
+    $observedExitCode = null;
 
     while (true) {
         $status = proc_get_status($proc);
@@ -211,6 +227,9 @@ function agent_bash_execute(PDO $pdo, int $id, string $user): array
         $stderr .= stream_get_contents($pipes[2]);
 
         if (!$status['running']) {
+            if (isset($status['exitcode']) && (int)$status['exitcode'] >= 0) {
+                $observedExitCode = (int)$status['exitcode'];
+            }
             break;
         }
         if ((microtime(true) - $start) >= $timeout) {
@@ -231,6 +250,9 @@ function agent_bash_execute(PDO $pdo, int $id, string $user): array
     fclose($pipes[1]);
     fclose($pipes[2]);
     $exitCode = proc_close($proc);
+    if (!$timedOut && $exitCode === -1 && $observedExitCode !== null) {
+        $exitCode = $observedExitCode;
+    }
     if ($timedOut) {
         $exitCode = -1;
         if ($stderr === '') {

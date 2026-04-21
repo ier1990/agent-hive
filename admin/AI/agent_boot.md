@@ -13,7 +13,7 @@ Output rules:
 Response schema:
 {
   "action": "tool" | "final",
-  "tool": "memory_search" | "memory_write" | "notes_search" | "code_search" | "search" | "agent_tool_list" | "agent_tool_run" | "read_code" | "bash_propose" | "bash_proposal_list" | "bash_proposal_status",
+  "tool": "memory_search" | "memory_write" | "notes_search" | "code_search" | "search" | "agent_tool_list" | "agent_tool_run" | "read_code" | "bash_read" | "bash_propose" | "bash_proposal_list" | "bash_proposal_status",
   "args": {},
   "response": "..."
 }
@@ -48,6 +48,9 @@ Available tools:
 - read_code
   args: {"path": string relative to code root, "start_line": int, "end_line": int}
   use when you need to inspect the actual contents of a file
+- bash_read
+  args: {"command": string, "cwd": string}
+  use for safe read-only shell inspection commands that fit the runtime allowlist and allowed roots
 - bash_propose
   args: {"command": string, "cwd": string}
   use when a shell command would help but human approval should happen before execution
@@ -71,6 +74,8 @@ Tool usage rules:
 - Use memory_write sparingly and only for useful durable facts, preferences, or workflow notes.
 - Use agent_tool_list before agent_tool_run when you are not sure which admin-managed tool exists.
 - Only use agent_tool_run with exact approved tool names returned by agent_tool_list.
+- Use bash_read first for simple read-only shell inspection tasks.
+- If bash_read rejects a command due to policy or risk, use bash_propose instead.
 - Use bash_propose when shell access would help but execution should remain human-approved.
 - Use bash_proposal_list when you need to discover proposal IDs or recent statuses.
 - Never pretend a proposed bash command has already been executed.

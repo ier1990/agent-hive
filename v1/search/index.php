@@ -16,8 +16,16 @@ require_once dirname(__DIR__, 2) . '/lib/schema_builder.php';
 require_once dirname(__DIR__, 2) . '/lib/registry_logger.php';
 
 // Search endpoint should not require tools scope.
-// API keys with "search" scope (or general allowed scopes in lan mode) should pass.
+// Keep `false` here: the second argument only means "needs tools scope".
 api_guard_once('search', false);
+
+// `api_guard()` does not enforce endpoint-specific scopes on its own.
+// For this route, require an authenticated key to include `search` or `tools`.
+$scopes = isset($GLOBALS['APP_SCOPES']) && is_array($GLOBALS['APP_SCOPES']) ? $GLOBALS['APP_SCOPES'] : [];
+$clientKey = isset($GLOBALS['APP_CLIENT_KEY']) ? (string)$GLOBALS['APP_CLIENT_KEY'] : '';
+if ($clientKey !== '' && !in_array('search', $scopes, true) && !in_array('tools', $scopes, true)) {
+  http_json(403, ['ok' => false, 'error' => 'forbidden', 'reason' => 'missing_search_scope']);
+}
 
 // --- search ---
 
@@ -36,7 +44,9 @@ grep -n "secret_key" /web/private/searxng/settings.yml
 grep -nE '^\s*secret_key\s*:' /web/private/searxng/settings.yml
 SEARXNG_SECRET_KEY=...
 */
-$IER_KEY    = getenv('IERNC_SEARCH_APIKEY') ?: '';
+
+//Unused for now, but we can use this for authenticated API access to SearXNG if needed in the future.
+//$IER_KEY    = getenv('IERNC_SEARCH_APIKEY') ?: '';
 
 
 // ---- database ----
@@ -109,6 +119,21 @@ function domain_of($u) {
   return implode('.', array_slice($parts, -2));
 }
 
+function clean_search_query($q) {
+  $q = (string)$q;
+  // Drop ASCII control characters that can confuse logs, cache keys, or upstream parsing.
+  $q = preg_replace('/[\x00-\x1F\x7F]+/', ' ', $q);
+  // Normalize all whitespace runs to a single ASCII space.
+  $q = preg_replace('/\s+/', ' ', $q);
+  $q = trim((string)$q);
+  // Keep query size operationally boring for cache keys and upstream requests.
+  if (strlen($q) > 500) {
+    $q = substr($q, 0, 500);
+    $q = rtrim($q);
+  }
+  return $q;
+}
+
 // ---- normalize input (GET or POST JSON) ----
 $body = ($_SERVER['REQUEST_METHOD'] === 'POST') ? json_body() : $_GET;
 
@@ -120,7 +145,7 @@ $body = ($_SERVER['REQUEST_METHOD'] === 'POST') ? json_body() : $_GET;
 // &time_range=
 // &safesearch=0
 // &theme=simple
-$q          = trim($body['q'] ?? '');
+$q          = clean_search_query($body['q'] ?? '');
 $category_general = 1;
 $language   = 'en-US';
 $time_range = '';
@@ -168,7 +193,7 @@ try {
   $db->exec($query);
   $db->exec($query_idx);
 
-  $TTL_DAYS = 7;
+  $TTL_DAYS = 365; // 1 year TTL for search cache (can be long since we only write new snapshots and never update old ones)
 
   $stmt = $db->prepare('
     SELECT body, cached_at, top_urls, ai_notes

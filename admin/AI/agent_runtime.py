@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import hashlib
 import os
-import shlex
 import sqlite3
 import subprocess
 import sys
@@ -13,9 +12,10 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
+from agent_bash import AgentBashTools
 from agent_common import AGENT_MEMORY_DB_PATH, DEFAULT_TMP_DIR, compact_json, load_agent_boot_prompt, parse_model_json
 
 
@@ -558,418 +558,8 @@ class AliveAgent:
         cfg = self.tool_settings.get("agent_tools", {})
         return cfg if isinstance(cfg, dict) else {}
 
-    def _bash_cfg(self) -> Dict[str, Any]:
-        cfg = self.tool_settings.get("bash", {})
-        return cfg if isinstance(cfg, dict) else {}
-
-    def _bash_enabled(self) -> bool:
-        cfg = self._bash_cfg()
-        return bool(cfg.get("enabled", True))
-
-    def _bash_db_path(self) -> Path:
-        cfg = self._bash_cfg()
-        raw = str(cfg.get("db_path", "") or "").strip()
-        if raw == "":
-            return self._agent_tools_db_path()
-        return Path(raw)
-
-    def _bash_timeout(self) -> int:
-        cfg = self._bash_cfg()
-        return max(1, int(cfg.get("execution_timeout_seconds", 30) or 30))
-
-    def _bash_max_command_length(self) -> int:
-        cfg = self._bash_cfg()
-        return max(80, min(int(cfg.get("max_command_length", 1200) or 1200), 8000))
-
-    def _bash_allowed_roots(self) -> List[str]:
-        cfg = self._bash_cfg()
-        raw = cfg.get("allowed_roots", [])
-        if not isinstance(raw, list):
-            raw = []
-        out: List[str] = []
-        for value in raw:
-            text = str(value or "").strip()
-            if text == "":
-                continue
-            try:
-                out.append(str(Path(text).resolve()))
-            except Exception:
-                continue
-        return out
-
-    def _ensure_bash_schema(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS bash_proposals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                command_text TEXT NOT NULL,
-                cwd TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'proposed',
-                risk_level TEXT NOT NULL DEFAULT 'medium',
-                operator_summary TEXT NOT NULL DEFAULT '',
-                tutorial_summary TEXT NOT NULL DEFAULT '{}',
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                proposed_by TEXT NOT NULL DEFAULT 'agent',
-                proposed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                approved_by TEXT NOT NULL DEFAULT '',
-                approved_at TEXT,
-                executed_by TEXT NOT NULL DEFAULT '',
-                executed_at TEXT,
-                exit_code INTEGER,
-                stdout_preview TEXT NOT NULL DEFAULT '',
-                stderr_preview TEXT NOT NULL DEFAULT '',
-                result_json TEXT NOT NULL DEFAULT '{}',
-                notes TEXT NOT NULL DEFAULT ''
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bash_proposals_status ON bash_proposals(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bash_proposals_time ON bash_proposals(proposed_at)")
-        conn.commit()
-
-    def _bash_root_allowed(self, cwd: Path) -> bool:
-        roots = self._bash_allowed_roots()
-        if not roots:
-            return False
-        cwd_text = str(cwd)
-        for root in roots:
-            if cwd_text == root or cwd_text.startswith(root.rstrip("/") + "/"):
-                return True
-        return False
-
-    def _bash_command_token_docs(self, command_name: str, token: str) -> str:
-        common_flags = {
-            "-n": "show line numbers",
-            "-l": "list results in a compact form",
-            "-a": "include hidden or all entries depending on the command",
-            "-h": "human-readable sizes or help depending on the command",
-            "-R": "recurse into subdirectories",
-            "-r": "recurse into subdirectories",
-            "-i": "case-insensitive search or in-place edit depending on the command",
-            "-c": "run the following string as a command",
-        }
-        command_docs = {
-            "rg": "ripgrep, a fast recursive search tool",
-            "grep": "search text for matching lines",
-            "ls": "list directory contents",
-            "find": "walk a directory tree and filter paths",
-            "wc": "count lines, words, or bytes",
-            "cat": "print file contents",
-            "head": "show the first lines of a file",
-            "tail": "show the last lines of a file",
-            "sed": "stream editor for selecting or transforming text",
-            "awk": "pattern-based text processor",
-            "sort": "sort lines of text",
-            "uniq": "collapse duplicate adjacent lines",
-            "cut": "extract fields or character ranges",
-            "pwd": "print the current working directory",
-            "stat": "show file metadata",
-            "file": "guess the file type",
-            "git": "inspect or modify git state",
-            "curl": "make an HTTP request",
-            "wget": "download from a URL",
-            "rm": "remove files or directories",
-            "mv": "move or rename files",
-            "cp": "copy files or directories",
-            "chmod": "change file permissions",
-            "chown": "change file ownership",
-            "mkdir": "create a directory",
-            "touch": "create a file or update timestamps",
-        }
-        if token == command_name:
-            return command_docs.get(command_name, "shell command")
-        if token in common_flags:
-            return common_flags[token]
-        if token.startswith("-"):
-            return "command option"
-        if token.startswith("/") or token.startswith("./") or token.startswith("../"):
-            return "filesystem path argument"
-        if "://" in token:
-            return "URL argument"
-        return "command argument"
-
-    def _summarize_bash_command(self, command: str, cwd: Path) -> Dict[str, Any]:
-        raw = command.strip()
-        tokens = shlex.split(raw)
-        command_name = tokens[0] if tokens else ""
-        lower_name = command_name.lower()
-        lower_raw = raw.lower()
-
-        read_only_commands = {"rg", "grep", "ls", "find", "wc", "cat", "head", "tail", "sort", "uniq", "cut", "pwd", "stat", "file"}
-        write_commands = {"rm", "mv", "cp", "chmod", "chown", "mkdir", "rmdir", "touch"}
-        network_commands = {"curl", "wget", "ssh", "scp", "rsync", "ping", "dig", "nc", "ncat"}
-        risk = "low"
-        writes: List[str] = []
-        reads: List[str] = [str(cwd)]
-        network = lower_name in network_commands
-        sudo = lower_name == "sudo" or lower_raw.startswith("sudo ")
-        destructive = lower_name in {"rm", "chmod", "chown"} or " rm " in lower_raw
-        chained = any(op in raw for op in [";", "&&", "||"])
-        piped = "|" in raw
-        redirected = ">" in raw or ">>" in raw
-
-        if lower_name in write_commands or redirected:
-            writes.append(str(cwd))
-        if network or sudo or destructive:
-            risk = "high"
-        elif chained or piped or redirected or lower_name not in read_only_commands:
-            risk = "medium"
-
-        purpose_map = {
-            "rg": "Search recursively for text matches.",
-            "grep": "Search text for matching lines.",
-            "ls": "List files in a directory.",
-            "find": "Find files or directories that match conditions.",
-            "wc": "Count lines, words, or bytes.",
-            "cat": "Print file contents.",
-            "head": "Show the first part of a file.",
-            "tail": "Show the last part of a file.",
-            "git": "Inspect or change git state.",
-            "curl": "Make a network request.",
-            "rm": "Delete files or directories.",
-            "mv": "Move or rename files.",
-            "cp": "Copy files or directories.",
-        }
-        operator_summary = purpose_map.get(lower_name, "Run a shell command in the selected working directory.")
-        if tokens:
-            operator_summary = operator_summary.rstrip(".") + " Command: " + raw
-
-        tutorial_tokens = []
-        for token in tokens[:12]:
-            tutorial_tokens.append(
-                {
-                    "part": token,
-                    "meaning": self._bash_command_token_docs(command_name, token),
-                }
-            )
-
-        safer_alternative = ""
-        if risk == "high":
-            safer_alternative = "Narrow the target path or split the command into simpler read-only inspection steps first."
-        elif lower_name in {"grep", "find"}:
-            safer_alternative = "Use rg for faster recursive searches when available."
-
-        return {
-            "risk": risk,
-            "reads": reads,
-            "writes": writes,
-            "network": network,
-            "sudo": sudo,
-            "operator_summary": operator_summary,
-            "tutorial_summary": {
-                "purpose": purpose_map.get(lower_name, "Run a shell command."),
-                "tokens": tutorial_tokens,
-                "why_this_command": "It is a direct shell expression for the requested task.",
-                "expected_output": "Terminal output from the command, or no output if it succeeds silently.",
-                "safer_alternative": safer_alternative,
-            },
-            "metadata": {
-                "command_name": command_name,
-                "token_count": len(tokens),
-                "chained": chained,
-                "piped": piped,
-                "redirected": redirected,
-                "cwd_allowed": self._bash_root_allowed(cwd),
-            },
-        }
-
-    def _tool_bash_propose(self, command: str, cwd: str) -> Dict[str, Any]:
-        if not self._bash_enabled():
-            return {"ok": False, "error": "bash_tool_disabled"}
-
-        command = str(command or "").strip()
-        if command == "":
-            return {"ok": False, "error": "empty_command"}
-        if len(command) > self._bash_max_command_length():
-            return {"ok": False, "error": "command_too_long"}
-
-        target_cwd = str(cwd or "").strip()
-        if target_cwd == "":
-            target_cwd = str(self.code_root)
-        try:
-            cwd_path = Path(target_cwd).resolve()
-        except Exception:
-            return {"ok": False, "error": "invalid_cwd"}
-        if not cwd_path.exists() or not cwd_path.is_dir():
-            return {"ok": False, "error": "cwd_missing", "cwd": str(cwd_path)}
-        if not self._bash_root_allowed(cwd_path):
-            return {"ok": False, "error": "cwd_not_allowed", "cwd": str(cwd_path), "allowed_roots": self._bash_allowed_roots()}
-
-        try:
-            shlex.split(command)
-        except Exception as e:
-            return {"ok": False, "error": "command_parse_failed", "detail": str(e)}
-
-        summary = self._summarize_bash_command(command, cwd_path)
-        db_path = self._bash_db_path()
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path))
-        try:
-            self._ensure_bash_schema(conn)
-            cursor = conn.execute(
-                """
-                INSERT INTO bash_proposals (
-                    command_text, cwd, status, risk_level, operator_summary,
-                    tutorial_summary, metadata_json, proposed_by
-                ) VALUES (?, ?, 'proposed', ?, ?, ?, ?, 'agent')
-                """,
-                (
-                    command,
-                    str(cwd_path),
-                    str(summary.get("risk", "medium")),
-                    str(summary.get("operator_summary", "")),
-                    compact_json(summary.get("tutorial_summary", {})),
-                    compact_json(
-                        {
-                            "reads": summary.get("reads", []),
-                            "writes": summary.get("writes", []),
-                            "network": bool(summary.get("network", False)),
-                            "sudo": bool(summary.get("sudo", False)),
-                            "metadata": summary.get("metadata", {}),
-                        }
-                    ),
-                ),
-            )
-            conn.commit()
-            proposal_id = int(cursor.lastrowid)
-        finally:
-            conn.close()
-
-        return {
-            "ok": True,
-            "proposal_id": proposal_id,
-            "status": "proposed",
-            "command": command,
-            "cwd": str(cwd_path),
-            "risk": summary.get("risk", "medium"),
-            "operator_summary": summary.get("operator_summary", ""),
-            "tutorial_summary": summary.get("tutorial_summary", {}),
-            "reads": summary.get("reads", []),
-            "writes": summary.get("writes", []),
-            "network": bool(summary.get("network", False)),
-            "sudo": bool(summary.get("sudo", False)),
-            "review_url": "/admin/admin_AI_Bash.php",
-            "approval_hint": "This command was proposed only. It still needs human approval before execution.",
-        }
-
-    def _tool_bash_proposal_status(self, proposal_id: int) -> Dict[str, Any]:
-        if not self._bash_enabled():
-            return {"ok": False, "error": "bash_tool_disabled"}
-        if int(proposal_id) <= 0:
-            return {"ok": False, "error": "invalid_proposal_id"}
-        db_path = self._bash_db_path()
-        if not db_path.exists():
-            return {"ok": False, "error": "bash_db_missing", "path": str(db_path)}
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        try:
-            self._ensure_bash_schema(conn)
-            row = conn.execute("SELECT * FROM bash_proposals WHERE id = ? LIMIT 1", (int(proposal_id),)).fetchone()
-        finally:
-            conn.close()
-        if row is None:
-            return {"ok": False, "error": "proposal_not_found", "proposal_id": int(proposal_id)}
-        tutorial_summary = {}
-        metadata = {}
-        result_json = {}
-        try:
-            tutorial_summary = json.loads(str(row["tutorial_summary"] or "{}"))
-        except Exception:
-            tutorial_summary = {}
-        try:
-            metadata = json.loads(str(row["metadata_json"] or "{}"))
-        except Exception:
-            metadata = {}
-        try:
-            result_json = json.loads(str(row["result_json"] or "{}"))
-        except Exception:
-            result_json = {}
-        return {
-            "ok": True,
-            "proposal": {
-                "id": int(row["id"]),
-                "command": str(row["command_text"] or ""),
-                "cwd": str(row["cwd"] or ""),
-                "status": str(row["status"] or ""),
-                "risk": str(row["risk_level"] or ""),
-                "operator_summary": str(row["operator_summary"] or ""),
-                "tutorial_summary": tutorial_summary,
-                "metadata": metadata,
-                "proposed_at": str(row["proposed_at"] or ""),
-                "approved_by": str(row["approved_by"] or ""),
-                "approved_at": str(row["approved_at"] or ""),
-                "executed_by": str(row["executed_by"] or ""),
-                "executed_at": str(row["executed_at"] or ""),
-                "exit_code": row["exit_code"],
-                "stdout_preview": str(row["stdout_preview"] or ""),
-                "stderr_preview": str(row["stderr_preview"] or ""),
-                "result": result_json,
-            },
-        }
-
-    def _tool_bash_proposal_list(self, limit: int, status: str) -> Dict[str, Any]:
-        if not self._bash_enabled():
-            return {"ok": False, "error": "bash_tool_disabled"}
-        db_path = self._bash_db_path()
-        if not db_path.exists():
-            return {"ok": False, "error": "bash_db_missing", "path": str(db_path)}
-
-        limit = max(1, min(int(limit), 100))
-        status_text = str(status or "").strip().lower()
-        allowed_statuses = {"proposed", "approved", "canceled", "executed", "failed"}
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        try:
-            self._ensure_bash_schema(conn)
-            if status_text in allowed_statuses:
-                rows = conn.execute(
-                    """
-                    SELECT id, command_text, cwd, status, risk_level, operator_summary,
-                           proposed_at, approved_at, executed_at, exit_code
-                    FROM bash_proposals
-                    WHERE status = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                    """,
-                    (status_text, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT id, command_text, cwd, status, risk_level, operator_summary,
-                           proposed_at, approved_at, executed_at, exit_code
-                    FROM bash_proposals
-                    ORDER BY id DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                ).fetchall()
-        finally:
-            conn.close()
-
-        items: List[Dict[str, Any]] = []
-        for row in rows:
-            items.append(
-                {
-                    "id": int(row["id"]),
-                    "command": str(row["command_text"] or ""),
-                    "cwd": str(row["cwd"] or ""),
-                    "status": str(row["status"] or ""),
-                    "risk": str(row["risk_level"] or ""),
-                    "operator_summary": str(row["operator_summary"] or ""),
-                    "proposed_at": str(row["proposed_at"] or ""),
-                    "approved_at": str(row["approved_at"] or ""),
-                    "executed_at": str(row["executed_at"] or ""),
-                    "exit_code": row["exit_code"],
-                }
-            )
-        return {
-            "ok": True,
-            "count": len(items),
-            "items": items,
-            "db_path": str(db_path),
-            "status_filter": status_text if status_text in allowed_statuses else "",
-        }
+    def _bash_tools(self) -> AgentBashTools:
+        return AgentBashTools(self.tool_settings, self.code_root)
 
     def _agent_tools_db_path(self) -> Path:
         cfg = self._agent_tools_cfg()
@@ -1277,12 +867,14 @@ try {
             return self._tool_agent_tool_run(str(args.get("name", "")), raw_params)
         if tool_name == "read_code":
             return self._tool_read_code(str(args.get("path", "")), int(args.get("start_line", 1)), int(args.get("end_line", 120)))
+        if tool_name == "bash_read":
+            return self._bash_tools().read(str(args.get("command", "")), str(args.get("cwd", "")))
         if tool_name == "bash_propose":
-            return self._tool_bash_propose(str(args.get("command", "")), str(args.get("cwd", "")))
+            return self._bash_tools().propose(str(args.get("command", "")), str(args.get("cwd", "")))
         if tool_name == "bash_proposal_list":
-            return self._tool_bash_proposal_list(int(args.get("limit", 20)), str(args.get("status", "")))
+            return self._bash_tools().proposal_list(int(args.get("limit", 20)), str(args.get("status", "")))
         if tool_name == "bash_proposal_status":
-            return self._tool_bash_proposal_status(int(args.get("proposal_id", 0)))
+            return self._bash_tools().proposal_status(int(args.get("proposal_id", 0)))
         return {"ok": False, "error": "unknown_tool", "tool": tool_name}
 
     def _system_prompt(self) -> str:
@@ -1297,6 +889,112 @@ try {
             context["memory_preview"] = self._tool_memory_search("", self._memory_autoload_limit())
         return context
 
+    def _known_tool_names(self) -> List[str]:
+        return [
+            "memory_search",
+            "memory_write",
+            "notes_search",
+            "code_search",
+            "search",
+            "agent_tool_list",
+            "agent_tool_run",
+            "read_code",
+            "bash_read",
+            "bash_propose",
+            "bash_proposal_list",
+            "bash_proposal_status",
+        ]
+
+    def _repair_tool_args(self, tool_name: str, args: Any) -> Dict[str, Any]:
+        out = args if isinstance(args, dict) else {}
+        if tool_name == "read_code":
+            if "start_line" not in out:
+                out["start_line"] = 1
+            if "end_line" not in out:
+                out["end_line"] = 120
+        if tool_name in ("bash_read", "bash_propose") and "cwd" not in out:
+            out["cwd"] = ""
+        if tool_name == "bash_proposal_list":
+            if "limit" not in out:
+                out["limit"] = 20
+            if "status" not in out:
+                out["status"] = ""
+        return out
+
+    def _normalize_action_object(self, obj: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(obj, dict):
+            return None
+
+        known_tools = set(self._known_tool_names())
+        action = str(obj.get("action", "") or "").strip().lower()
+        tool_name = str(obj.get("tool", "") or "").strip()
+        response = obj.get("response", "")
+        args = obj.get("args", {})
+
+        if action == "final":
+            return {"action": "final", "response": response}
+
+        if action == "tool" and tool_name in known_tools:
+            return {"action": "tool", "tool": tool_name, "args": self._repair_tool_args(tool_name, args)}
+
+        if action in known_tools:
+            if tool_name == "":
+                tool_name = action
+            return {"action": "tool", "tool": tool_name, "args": self._repair_tool_args(tool_name, args)}
+
+        if action == "" and tool_name in known_tools:
+            return {"action": "tool", "tool": tool_name, "args": self._repair_tool_args(tool_name, args)}
+
+        return None
+
+    def _normalize_model_response(self, raw_text: str) -> Optional[Dict[str, Any]]:
+        parsed = parse_model_json(raw_text)
+        normalized = self._normalize_action_object(parsed)
+        if normalized is not None:
+            return normalized
+
+        if not isinstance(parsed, dict):
+            return None
+
+        choices = parsed.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                message = first.get("message", {})
+                if isinstance(message, dict):
+                    content = message.get("content", "")
+                    if isinstance(content, str) and content.strip() != "":
+                        normalized = self._normalize_action_object(parse_model_json(content))
+                        if normalized is not None:
+                            return normalized
+
+                    tool_calls = message.get("tool_calls", [])
+                    if isinstance(tool_calls, list) and tool_calls:
+                        for row in tool_calls:
+                            if not isinstance(row, dict):
+                                continue
+                            function = row.get("function", {})
+                            if not isinstance(function, dict):
+                                continue
+                            fn_name = str(function.get("name", "") or "").strip()
+                            args_text = function.get("arguments", "")
+                            candidate = parse_model_json(str(args_text or ""))
+                            normalized = self._normalize_action_object(candidate)
+                            if normalized is not None:
+                                if normalized.get("tool", "") == "" and fn_name in self._known_tool_names():
+                                    normalized["tool"] = fn_name
+                                    normalized["args"] = self._repair_tool_args(fn_name, normalized.get("args", {}))
+                                return normalized
+                            if fn_name in self._known_tool_names():
+                                fallback_args = candidate if isinstance(candidate, dict) else {}
+                                return {
+                                    "action": "tool",
+                                    "tool": fn_name,
+                                    "args": self._repair_tool_args(fn_name, fallback_args),
+                                }
+
+        return None
+
     def run(self, user_request: str, debug: bool = False) -> str:
         messages: List[Dict[str, str]] = [{"role": "system", "content": self._system_prompt()}]
         preload = self._auto_context(user_request)
@@ -1305,7 +1003,7 @@ try {
 
         for step in range(1, self.max_steps + 1):
             model_out = self._chat_completion(messages)
-            parsed = parse_model_json(model_out)
+            parsed = self._normalize_model_response(model_out)
 
             if debug:
                 print("\n[step %d model] %s" % (step, model_out), file=sys.stderr)

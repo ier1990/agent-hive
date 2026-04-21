@@ -89,6 +89,7 @@ EXECUTABLE_DIRS=(
     "$PROJECT_ROOT/private/scripts"
     "$PROJECT_ROOT/private/bin"
     "$PROJECT_ROOT/.githooks"
+    "$PROJECT_ROOT/.venv/bin"
 )
 # --------------------------------------------------------------------------- #
 # Directories that should be Public 644

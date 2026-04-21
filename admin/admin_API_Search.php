@@ -9,6 +9,13 @@ function h($v) {
     return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
 }
 
+function mask_key($key) {
+    $key = (string)$key;
+    $len = strlen($key);
+    if ($len <= 10) return str_repeat('*', $len);
+    return substr($key, 0, 6) . str_repeat('*', max($len - 10, 4)) . substr($key, -4);
+}
+
 function auth_csrf_token() {
     if (function_exists('auth_session_start')) {
         auth_session_start();
@@ -45,8 +52,98 @@ function search_cache_db_path() {
     return rtrim((string)PRIVATE_ROOT, '/\\') . '/db/memory/search_cache.db';
 }
 
+function format_bytes($bytes) {
+    $bytes = (float)$bytes;
+    if ($bytes <= 0) return '0 B';
+    $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    $pow = (int)floor(log($bytes, 1024));
+    if ($pow < 0) $pow = 0;
+    if ($pow > count($units) - 1) $pow = count($units) - 1;
+    $value = $bytes / pow(1024, $pow);
+    return number_format($value, $pow === 0 ? 0 : 2) . ' ' . $units[$pow];
+}
+
+function search_cache_db_summary() {
+    $path = search_cache_db_path();
+    $exists = is_file($path);
+    $sizeBytes = ($exists && is_readable($path)) ? (int)@filesize($path) : 0;
+    $rowCount = null;
+    if ($exists && is_readable($path)) {
+        try {
+            $pdo = new PDO('sqlite:' . $path);
+            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $value = $pdo->query('SELECT COUNT(*) FROM search_cache_history')->fetchColumn();
+            $rowCount = $value === false ? null : (int)$value;
+        } catch (Throwable $e) {
+            $rowCount = null;
+        }
+    }
+    return [
+        'path' => $path,
+        'exists' => $exists,
+        'size_bytes' => $sizeBytes,
+        'size_human' => format_bytes($sizeBytes),
+        'row_count' => $rowCount,
+    ];
+}
+
 function codewalker_settings_db_path() {
     return rtrim((string)PRIVATE_ROOT, '/\\') . '/db/codewalker_settings.db';
+}
+
+function api_keys_file_path() {
+    return defined('API_KEYS_FILE') ? (string)API_KEYS_FILE : rtrim((string)PRIVATE_ROOT, '/\\') . '/api_keys.json';
+}
+
+function load_api_keys_for_search() {
+    $path = api_keys_file_path();
+    if (!is_file($path) || !is_readable($path)) return [];
+
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || $raw === '') return [];
+
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) return [];
+
+    $rows = [];
+    foreach ($decoded as $key => $entry) {
+        $name = '';
+        $active = true;
+        $scopes = [];
+        $createdAt = '';
+
+        if (is_array($entry) && array_key_exists('scopes', $entry)) {
+            $name = isset($entry['name']) ? trim((string)$entry['name']) : '';
+            $active = !isset($entry['active']) || (bool)$entry['active'];
+            $scopes = isset($entry['scopes']) && is_array($entry['scopes']) ? array_values($entry['scopes']) : [];
+            $createdAt = isset($entry['created_at']) ? (string)$entry['created_at'] : '';
+        } elseif (is_array($entry)) {
+            $scopes = array_values($entry);
+        }
+
+        $hasSearchAccess = in_array('search', $scopes, true) || in_array('tools', $scopes, true);
+        $rows[] = [
+            'key' => (string)$key,
+            'masked_key' => mask_key((string)$key),
+            'name' => $name,
+            'active' => $active,
+            'scopes' => $scopes,
+            'created_at' => $createdAt,
+            'has_search_access' => $hasSearchAccess,
+        ];
+    }
+
+    usort($rows, function ($a, $b) {
+        if ($a['has_search_access'] !== $b['has_search_access']) {
+            return $a['has_search_access'] ? -1 : 1;
+        }
+        if ($a['active'] !== $b['active']) {
+            return $a['active'] ? -1 : 1;
+        }
+        return strcmp((string)$a['name'], (string)$b['name']);
+    });
+
+    return $rows;
 }
 
 function load_search_api_base_from_codewalker_db() {
@@ -187,6 +284,8 @@ $searxResult = null;
 $v1Result = null;
 $error = '';
 $flash = '';
+$searchApiKeys = load_api_keys_for_search();
+$searchCacheSummary = search_cache_db_summary();
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $action = isset($_POST['action']) ? (string)$_POST['action'] : 'run_test';
@@ -253,7 +352,15 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
         code { background:#020617; border:1px solid #334155; border-radius:6px; padding:1px 4px; }
         .row { margin-top:8px; }
         a { color:#38bdf8; }
+        .pill { display:inline-block; margin:2px 6px 2px 0; padding:2px 8px; border-radius:999px; border:1px solid #334155; background:#0b1220; font-size:12px; color:#cbd5e1; }
+        .pill.ok { border-color:#14532d; color:#86efac; background:#052e16; }
+        .pill.off { border-color:#7f1d1d; color:#fca5a5; background:#450a0a; }
+        .copy-btn { width:auto; background:#1d4ed8; color:#dbeafe; font-weight:600; }
+        .use-btn { width:auto; background:#0f766e; color:#ccfbf1; font-weight:600; }
+        .key-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+        .helper-grid { display:grid; gap:12px; grid-template-columns:repeat(2, minmax(280px, 1fr)); }
         @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
+        @media (max-width: 900px) { .helper-grid { grid-template-columns:1fr; } }
     </style>
 </head>
 <body>
@@ -261,6 +368,23 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
     <div class="card">
         <h1>API Search Tester</h1>
         <div class="muted">Test raw SearXNG and your API endpoint <code>/v1/search</code>. Search cache UI: <a href="/admin/admin_notes.php?view=search_cache">/admin/admin_notes.php?view=search_cache</a></div>
+        <div class="row muted">Search cache DB: <code><?php echo h((string)$searchCacheSummary['path']); ?></code> | size: <strong><?php echo h((string)$searchCacheSummary['size_human']); ?></strong> | rows: <strong><?php echo h($searchCacheSummary['row_count'] === null ? 'n/a' : number_format((int)$searchCacheSummary['row_count'])); ?></strong><?php if (!$searchCacheSummary['exists']): ?> | missing<?php endif; ?></div>
+    </div>
+
+    <div class="card">
+        <h2>How This Page Works</h2>
+        <div class="helper-grid">
+            <div>
+                <div class="row"><strong>SearXNG URL</strong> is the upstream engine this server talks to, often a local or Tailscale address.</div>
+                <div class="row"><strong>/v1/search URL</strong> is the public API endpoint your agents or other servers call, for example <code>https://www.iernc.com/v1/search/</code>.</div>
+                <div class="row">When public mode is enabled, <code>/v1/search</code> needs a valid API key from this server's key store.</div>
+            </div>
+            <div>
+                <div class="row"><strong>Keys are stored at</strong> <code><?php echo h(api_keys_file_path()); ?></code>.</div>
+                <div class="row">This tester does not auto-inject a key unless you paste one or use a key from the list below.</div>
+                <div class="row"><a href="/admin/admin_API.php?tab=keys">Open API Key Manager</a> to create, edit, activate, or remove keys and scopes.</div>
+            </div>
+        </div>
     </div>
 
     <div class="card">
@@ -288,8 +412,8 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
                     <input type="text" name="v1_search_url" value="<?php echo h($v1SearchUrl); ?>" placeholder="http://192.168.0.142/v1/search">
                 </div>
                 <div>
-                    <label>API Key for /v1/search (optional)</label>
-                    <input type="text" name="api_key" value="<?php echo h($apiKey); ?>" placeholder="key with search scope">
+                    <label>API Key for /v1/search</label>
+                    <input type="text" id="api-key-input" name="api_key" value="<?php echo h($apiKey); ?>" placeholder="key with search or tools scope">
                 </div>
             </div>
             <div class="row" style="display:flex;gap:10px;flex-wrap:wrap">
@@ -308,6 +432,61 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
         <?php endif; ?>
         <?php if ($error !== ''): ?>
             <div class="row err"><strong>Error:</strong> <?php echo h($error); ?></div>
+        <?php endif; ?>
+    </div>
+
+    <div class="card">
+        <h2>Keys With Access Context</h2>
+        <div class="muted">These entries come from <code><?php echo h(api_keys_file_path()); ?></code>. Keys with <code>search</code> or <code>tools</code> scope can call <code>/v1/search</code> on this server.</div>
+        <?php if (empty($searchApiKeys)): ?>
+            <div class="row muted">No readable keys found.</div>
+        <?php else: ?>
+            <table>
+                <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Masked Key</th>
+                    <th>Status</th>
+                    <th>Scopes</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($searchApiKeys as $row): ?>
+                    <tr>
+                        <td><?php echo h($row['name'] !== '' ? $row['name'] : 'Unnamed key'); ?></td>
+                        <td><code><?php echo h($row['masked_key']); ?></code></td>
+                        <td>
+                            <span class="pill <?php echo $row['active'] ? 'ok' : 'off'; ?>">
+                                <?php echo $row['active'] ? 'active' : 'inactive'; ?>
+                            </span>
+                            <?php if ($row['has_search_access']): ?>
+                                <span class="pill ok">search access</span>
+                            <?php else: ?>
+                                <span class="pill off">no search scope</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if (!empty($row['scopes'])): ?>
+                                <?php foreach ($row['scopes'] as $scope): ?>
+                                    <span class="pill"><?php echo h((string)$scope); ?></span>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <span class="muted">none</span>
+                            <?php endif; ?>
+                        </td>
+                        <td><?php echo h($row['created_at'] !== '' ? $row['created_at'] : '-'); ?></td>
+                        <td>
+                            <div class="key-actions">
+                                <button type="button" class="use-btn js-use-key" data-key="<?php echo h($row['key']); ?>">Use In Tester</button>
+                                <button type="button" class="copy-btn js-copy-key" data-key="<?php echo h($row['key']); ?>">Copy Key</button>
+                            </div>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
         <?php endif; ?>
     </div>
 
@@ -370,5 +549,35 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
         <?php endif; ?>
     </div>
 </div>
+<script>
+(function () {
+    var input = document.getElementById('api-key-input');
+    function copyText(text) {
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text);
+            return;
+        }
+        var temp = document.createElement('textarea');
+        temp.value = text;
+        document.body.appendChild(temp);
+        temp.select();
+        document.execCommand('copy');
+        document.body.removeChild(temp);
+    }
+    document.querySelectorAll('.js-use-key').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            if (!input) return;
+            input.value = btn.getAttribute('data-key') || '';
+            input.focus();
+        });
+    });
+    document.querySelectorAll('.js-copy-key').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            copyText(btn.getAttribute('data-key') || '');
+        });
+    });
+})();
+</script>
 </body>
 </html>

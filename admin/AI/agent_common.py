@@ -11,12 +11,14 @@ from typing import Any, Dict, Optional
 
 APP_ROOT = Path(__file__).resolve().parents[2]
 AGENT_BOOT_PATH = Path(__file__).resolve().with_name("agent_boot.md")
+AGENT_BASH_SETTINGS_PATH = Path(__file__).resolve().with_name("agent_bash.json")
 DEFAULT_AGENT_CONFIG_PATH = Path(__file__).resolve().with_name("default_agent.json")
 DEFAULT_PRIVATE_ROOT = Path(os.environ.get("APP_PRIVATE_ROOT", "/web/private"))
 AI_SETTINGS_DB_PATH = DEFAULT_PRIVATE_ROOT / "db" / "codewalker_settings.db"
 AGENT_DB_PATH = DEFAULT_PRIVATE_ROOT / "db" / "agent_tools.db"
 AGENT_MEMORY_DB_PATH = DEFAULT_PRIVATE_ROOT / "db" / "memory" / "agent_ai_memory.db"
 PRIVATE_AGENT_CONFIG_PATH = DEFAULT_PRIVATE_ROOT / "agent.json"
+PRIVATE_AGENT_BASH_SETTINGS_PATH = DEFAULT_PRIVATE_ROOT / "agent_bash.json"
 AGENT_TOOL_SETTINGS_PATH = DEFAULT_PRIVATE_ROOT / "agent_tools.json"
 PRIVATE_ENV_PATH = DEFAULT_PRIVATE_ROOT / ".env"
 DEFAULT_NOTES_DB = DEFAULT_PRIVATE_ROOT / "db" / "memory" / "human_notes.db"
