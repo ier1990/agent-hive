@@ -153,7 +153,6 @@ auth_require_admin();
 - `chat/`, `search/`, `expert/` - AI interactions
 - `receiving/`, `request/`, `response/` - Data flow
 - `models/` - Model info
-- `whatip.php` - IP detection
 
 **Inbox Auto-Table Creation:**
 ```bash

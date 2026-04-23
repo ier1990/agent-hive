@@ -38,22 +38,55 @@ function health_sqlite_fetch_one(string $path, string $sql): ?array {
     }
 }
 
+function health_client_ip(): string {
+    if (function_exists('get_client_ip_trusted')) {
+        return (string)get_client_ip_trusted();
+    }
+    return (string)($_SERVER['REMOTE_ADDR'] ?? '');
+}
+
+function health_verbose_allowed(string $clientIp): bool {
+    global $ALLOW_IPS_WITHOUT_KEY;
+    $allow = is_array($ALLOW_IPS_WITHOUT_KEY) ? $ALLOW_IPS_WITHOUT_KEY : [];
+    if ($clientIp === '') {
+        return false;
+    }
+    if (function_exists('ip_in_list') && ip_in_list($clientIp, $allow)) {
+        return true;
+    }
+    return $clientIp === '127.0.0.1' || $clientIp === '::1';
+}
+
+$service = defined('APP_SERVICE_NAME') ? (string)APP_SERVICE_NAME : 'api';
+$clientIp = health_client_ip();
+$wantVerbose = isset($_GET['verbose']) && $_GET['verbose'] === '1';
+$canSeeVerbose = health_verbose_allowed($clientIp);
+
+if (!$wantVerbose || !$canSeeVerbose) {
+    http_response_code(200);
+    echo json_encode([
+        'ok' => true,
+        'service' => $service,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+    exit;
+}
+
 $privateRoot = defined('PRIVATE_ROOT') ? (string)PRIVATE_ROOT : '/web/private';
 $apiKeysPath = defined('API_KEYS_FILE') ? (string)API_KEYS_FILE : (rtrim($privateRoot, '/\\') . '/api_keys.json');
 
 $resp = [
     'ok' => true,
-    'service' => defined('APP_SERVICE_NAME') ? APP_SERVICE_NAME : 'iernc-api',
+    'service' => $service,
     'endpoint' => 'v1/health',
     'time' => gmdate('c'),
     'host' => gethostname(),
     'php' => PHP_VERSION,
-    'your_ip' => function_exists('get_client_ip_trusted') ? get_client_ip_trusted() : ($_SERVER['REMOTE_ADDR'] ?? null),
+    'your_ip' => $clientIp,
     'version' => (string)env('APP_VERSION', 'dev'),
+    'verbose' => true,
     'checks' => [],
 ];
 
-// Core filesystem/runtime checks
 $resp['checks']['private_root'] = [
     'ok' => is_dir($privateRoot) && is_writable($privateRoot),
     'path' => $privateRoot,
@@ -69,7 +102,6 @@ $resp['checks']['runtime_dirs'] = [
     'locks_dir' => ['path' => $locksDir, 'exists' => is_dir($locksDir), 'writable' => is_writable($locksDir)],
 ];
 
-// API key map
 $apiKeys = health_read_json_file($apiKeysPath);
 $activeKeyCount = 0;
 if (is_array($apiKeys)) {
@@ -86,7 +118,6 @@ if (!is_array($apiKeys)) {
     $resp['checks']['api_keys']['err'] = 'missing_or_invalid_json';
 }
 
-// Search cache health
 $searchDb = rtrim($privateRoot, '/\\') . '/db/memory/search_cache.db';
 $searchRow = health_sqlite_fetch_one($searchDb, "SELECT COUNT(*) AS rows, MAX(cached_at) AS last_cached_at FROM search_cache_history");
 $resp['checks']['search_cache'] = [
@@ -98,7 +129,6 @@ if (is_array($searchRow)) {
     $resp['checks']['search_cache']['last_cached_at'] = (string)($searchRow['last_cached_at'] ?? '');
 }
 
-// Cluster health (if enabled/used)
 $clusterDb = rtrim($privateRoot, '/\\') . '/db/cluster.db';
 $clusterRow = health_sqlite_fetch_one($clusterDb, "SELECT COUNT(*) AS servers, MAX(last_seen) AS last_seen FROM servers");
 $samplesRow = health_sqlite_fetch_one($clusterDb, "SELECT COUNT(*) AS samples_24h FROM heartbeat_samples WHERE sampled_at >= datetime('now','-1 day')");
@@ -114,7 +144,6 @@ if (is_array($samplesRow)) {
     $resp['checks']['cluster']['samples_24h'] = (int)($samplesRow['samples_24h'] ?? 0);
 }
 
-// Cron dispatcher health
 $cronDb = rtrim($privateRoot, '/\\') . '/db/memory/cron_dispatcher.db';
 $cronRow = health_sqlite_fetch_one($cronDb, "SELECT COUNT(*) AS enabled_tasks, MAX(last_run_at) AS last_run_at FROM cron_tasks WHERE enabled = 1");
 $resp['checks']['cron_dispatcher'] = [
@@ -134,4 +163,3 @@ foreach ($resp['checks'] as $chk) {
 
 http_response_code($resp['ok'] ? 200 : 503);
 echo json_encode($resp, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
-

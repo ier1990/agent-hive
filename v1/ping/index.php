@@ -1,5 +1,6 @@
 <?php
 // /web/html/v1/ping.php
+declare(strict_types=1);
 
 // ----------
 // CORS (simple + future-safe)
@@ -39,15 +40,44 @@ if (!in_array($method, ['GET', 'POST'], true)) {
 require_once dirname(__DIR__, 2) . '/lib/bootstrap.php';
 api_guard('ping', false); // enable later when you want auth gating
 
+function ping_client_ip(): string {
+  if (function_exists('get_client_ip_trusted')) {
+    return (string)get_client_ip_trusted();
+  }
+  return (string)($_SERVER['REMOTE_ADDR'] ?? '');
+}
+
+function ping_verbose_allowed(string $clientIp): bool {
+  global $ALLOW_IPS_WITHOUT_KEY;
+  $allow = is_array($ALLOW_IPS_WITHOUT_KEY) ? $ALLOW_IPS_WITHOUT_KEY : [];
+  if ($clientIp === '') {
+    return false;
+  }
+  if (function_exists('ip_in_list') && ip_in_list($clientIp, $allow)) {
+    return true;
+  }
+  return $clientIp === '127.0.0.1' || $clientIp === '::1';
+}
+
 header('Content-Type: application/json; charset=utf-8');
 
-echo json_encode([
+$clientIp = ping_client_ip();
+$wantVerbose = isset($_GET['verbose']) && $_GET['verbose'] === '1';
+$canSeeVerbose = ping_verbose_allowed($clientIp);
+
+$resp = [
   'ok' => true,
-  'service' => 'iernc-api',
-  'endpoint' => 'v1/ping',
-  'time' => gmdate('c'),
-  'host' => gethostname(),
-  'server_ip' => $_SERVER['SERVER_ADDR'] ?? null,
-  'your_ip' => $_SERVER['REMOTE_ADDR'] ?? null,
-  'method' => $method,
-], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+  'service' => defined('APP_SERVICE_NAME') ? (string)APP_SERVICE_NAME : 'iernc-api',
+  'your_ip' => $clientIp,
+];
+
+if ($wantVerbose && $canSeeVerbose) {
+  $resp['endpoint'] = 'v1/ping';
+  $resp['time'] = gmdate('c');
+  $resp['host'] = gethostname();
+  $resp['server_ip'] = $_SERVER['SERVER_ADDR'] ?? null;
+  $resp['method'] = $method;
+  $resp['verbose'] = true;
+}
+
+echo json_encode($resp, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
