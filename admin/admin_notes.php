@@ -1,4 +1,3 @@
 <?php
-// '/admin/notes/index.php';
-include __DIR__ . '/notes/index.php';
+include __DIR__ . '/admin_Human_Notes.php';
 ?>
