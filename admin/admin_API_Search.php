@@ -189,6 +189,71 @@ function save_search_api_base_to_codewalker_db($value) {
     }
 }
 
+function search_provider_defaults() {
+    return [
+        'default_provider' => 'primary',
+        'primary' => [
+            'type' => 'searxng',
+            'url' => trim((string)(getenv('SEARX_URL') ?: '')),
+            'api_key' => trim((string)(getenv('IERNC_SEARCH_APIKEY') ?: '')),
+        ],
+        'secondary' => [
+            'type' => 'searchapi_google',
+            'url' => 'https://www.searchapi.io/api/v1/search',
+            'api_key' => '',
+        ],
+    ];
+}
+
+function load_external_search_provider_settings() {
+    $settings = search_provider_defaults();
+    $path = codewalker_settings_db_path();
+    if (!is_file($path) || !is_readable($path)) return $settings;
+    try {
+        $db = new SQLite3($path);
+        $stmt = $db->prepare('SELECT value FROM settings WHERE key = :k LIMIT 1');
+        $stmt->bindValue(':k', 'search.external.providers', SQLITE3_TEXT);
+        $res = $stmt->execute();
+        $row = $res ? $res->fetchArray(SQLITE3_ASSOC) : null;
+        $db->close();
+        if (!is_array($row) || !isset($row['value'])) return $settings;
+        $decoded = json_decode((string)$row['value'], true);
+        if (!is_array($decoded)) return $settings;
+        if (isset($decoded['default_provider']) && ($decoded['default_provider'] === 'primary' || $decoded['default_provider'] === 'secondary')) {
+            $settings['default_provider'] = $decoded['default_provider'];
+        }
+        foreach (['primary', 'secondary'] as $slot) {
+            if (!isset($decoded[$slot]) || !is_array($decoded[$slot])) continue;
+            if (isset($decoded[$slot]['type'])) $settings[$slot]['type'] = trim((string)$decoded[$slot]['type']);
+            if (isset($decoded[$slot]['url'])) $settings[$slot]['url'] = trim((string)$decoded[$slot]['url']);
+            if (isset($decoded[$slot]['api_key'])) $settings[$slot]['api_key'] = trim((string)$decoded[$slot]['api_key']);
+        }
+    } catch (Throwable $e) {
+        return $settings;
+    }
+    return $settings;
+}
+
+function save_external_search_provider_settings($settings) {
+    $path = codewalker_settings_db_path();
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    try {
+        $db = new SQLite3($path);
+        $db->exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)');
+        $stmt = $db->prepare('INSERT INTO settings(key, value) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+        $stmt->bindValue(':k', 'search.external.providers', SQLITE3_TEXT);
+        $stmt->bindValue(':v', json_encode($settings, JSON_UNESCAPED_SLASHES), SQLITE3_TEXT);
+        $ok = $stmt->execute() !== false;
+        $db->close();
+        return $ok;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
 function load_search_api_base_from_notes_db() {
     $path = notes_db_path();
     if (!is_file($path) || !is_readable($path)) return '';
@@ -244,6 +309,32 @@ function http_get_json($url, array $headers, $timeoutSec) {
     ];
 }
 
+function ai_overview_plain_text($payload) {
+    if (!is_array($payload) || !isset($payload['ai_overview']) || !is_array($payload['ai_overview'])) return '';
+    $blocks = isset($payload['ai_overview']['text_blocks']) && is_array($payload['ai_overview']['text_blocks']) ? $payload['ai_overview']['text_blocks'] : [];
+    $parts = [];
+    foreach ($blocks as $block) {
+        if (!is_array($block)) continue;
+        $answer = isset($block['answer']) ? trim((string)$block['answer']) : '';
+        if ($answer !== '') $parts[] = $answer;
+    }
+    return trim(implode("\n\n", $parts));
+}
+
+function related_search_labels($payload) {
+    if (!is_array($payload) || !isset($payload['related_searches']) || !is_array($payload['related_searches'])) return [];
+    $labels = [];
+    foreach ($payload['related_searches'] as $item) {
+        if (is_array($item) && isset($item['query'])) {
+            $q = trim((string)$item['query']);
+            if ($q !== '') $labels[] = $q;
+        } elseif (is_string($item) && trim($item) !== '') {
+            $labels[] = trim($item);
+        }
+    }
+    return $labels;
+}
+
 function fetch_recent_search_cache_rows($limit) {
     $path = search_cache_db_path();
     if (!is_file($path) || !is_readable($path)) return [];
@@ -286,12 +377,41 @@ $error = '';
 $flash = '';
 $searchApiKeys = load_api_keys_for_search();
 $searchCacheSummary = search_cache_db_summary();
+$providerSettings = load_external_search_provider_settings();
+$primaryProviderType = trim((string)($_POST['primary_provider_type'] ?? ($_GET['primary_provider_type'] ?? $providerSettings['primary']['type'])));
+$primaryProviderUrl = trim((string)($_POST['primary_provider_url'] ?? ($_GET['primary_provider_url'] ?? $providerSettings['primary']['url'])));
+$primaryProviderApiKey = trim((string)($_POST['primary_provider_api_key'] ?? ($_GET['primary_provider_api_key'] ?? $providerSettings['primary']['api_key'])));
+$secondaryProviderType = trim((string)($_POST['secondary_provider_type'] ?? ($_GET['secondary_provider_type'] ?? $providerSettings['secondary']['type'])));
+$secondaryProviderUrl = trim((string)($_POST['secondary_provider_url'] ?? ($_GET['secondary_provider_url'] ?? $providerSettings['secondary']['url'])));
+$secondaryProviderApiKey = trim((string)($_POST['secondary_provider_api_key'] ?? ($_GET['secondary_provider_api_key'] ?? $providerSettings['secondary']['api_key'])));
+$defaultProviderSlot = trim((string)($_POST['default_provider_slot'] ?? ($_GET['default_provider_slot'] ?? $providerSettings['default_provider'])));
+if ($defaultProviderSlot !== 'secondary') $defaultProviderSlot = 'primary';
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $action = isset($_POST['action']) ? (string)$_POST['action'] : 'run_test';
     $csrf = isset($_POST['csrf_token']) ? (string)$_POST['csrf_token'] : '';
     if (!auth_csrf_ok($csrf)) {
         $error = 'Invalid CSRF token.';
+    } elseif ($action === 'save_external_provider_settings') {
+        $settingsToSave = [
+            'default_provider' => $defaultProviderSlot,
+            'primary' => [
+                'type' => $primaryProviderType,
+                'url' => $primaryProviderUrl,
+                'api_key' => $primaryProviderApiKey,
+            ],
+            'secondary' => [
+                'type' => $secondaryProviderType,
+                'url' => $secondaryProviderUrl,
+                'api_key' => $secondaryProviderApiKey,
+            ],
+        ];
+        if (save_external_search_provider_settings($settingsToSave)) {
+            $flash = 'Saved external search provider settings.';
+            $providerSettings = $settingsToSave;
+        } else {
+            $error = 'Failed to save external search provider settings.';
+        }
     } elseif ($action === 'save_search_base') {
         $normalized = normalize_v1_search_url($v1SearchUrl, $baseUrl);
         if (save_search_api_base_to_codewalker_db($normalized)) {
@@ -367,7 +487,7 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
 <div class="wrap">
     <div class="card">
         <h1>API Search Tester</h1>
-        <div class="muted">Test raw SearXNG and your API endpoint <code>/v1/search</code>. Search cache UI: <a href="/admin/admin_notes.php?view=search_cache">/admin/admin_notes.php?view=search_cache</a></div>
+        <div class="muted">Test raw SearXNG and your API endpoint <code>/v1/search</code>. Search cache UI: <a href="/admin/admin_db.php?db=memory%2Fsearch_cache.db&table=search_cache_history&page=1&per=99999">admin_db.php?db=</a></div>
         <div class="row muted">Search cache DB: <code><?php echo h((string)$searchCacheSummary['path']); ?></code> | size: <strong><?php echo h((string)$searchCacheSummary['size_human']); ?></strong> | rows: <strong><?php echo h($searchCacheSummary['row_count'] === null ? 'n/a' : number_format((int)$searchCacheSummary['row_count'])); ?></strong><?php if (!$searchCacheSummary['exists']): ?> | missing<?php endif; ?></div>
     </div>
 
@@ -433,6 +553,63 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
         <?php if ($error !== ''): ?>
             <div class="row err"><strong>Error:</strong> <?php echo h($error); ?></div>
         <?php endif; ?>
+    </div>
+
+    <div class="card">
+        <h2>External Search Providers</h2>
+        <div class="muted">Configure the upstream engines that <code>/v1/search</code> can use. The default slot is tried first, and the other slot is used as backup if the first one fails.</div>
+        <form method="post">
+            <input type="hidden" name="csrf_token" value="<?php echo h(auth_csrf_token()); ?>">
+            <div class="grid">
+                <div>
+                    <label>Default Provider Slot</label>
+                    <select name="default_provider_slot">
+                        <option value="primary"<?php echo $defaultProviderSlot === 'primary' ? ' selected' : ''; ?>>Primary first</option>
+                        <option value="secondary"<?php echo $defaultProviderSlot === 'secondary' ? ' selected' : ''; ?>>Secondary first</option>
+                    </select>
+                </div>
+            </div>
+            <div class="helper-grid" style="margin-top:12px;">
+                <div class="card" style="margin-bottom:0;">
+                    <h3 style="margin-bottom:10px;">Primary Provider</h3>
+                    <label>Type</label>
+                    <select name="primary_provider_type">
+                        <option value="searxng"<?php echo $primaryProviderType === 'searxng' ? ' selected' : ''; ?>>SearXNG</option>
+                        <option value="brave"<?php echo $primaryProviderType === 'brave' ? ' selected' : ''; ?>>Brave Search API</option>
+                        <option value="searchapi_google"<?php echo $primaryProviderType === 'searchapi_google' ? ' selected' : ''; ?>>SearchAPI.io (Google)</option>
+                    </select>
+                    <div class="row">
+                        <label>Base URL</label>
+                        <input type="text" name="primary_provider_url" value="<?php echo h($primaryProviderUrl); ?>" placeholder="http://tailscale-or-lan:8080 or https://www.searchapi.io/api/v1/search">
+                    </div>
+                    <div class="row">
+                        <label>API Key / Token</label>
+                        <input type="password" name="primary_provider_api_key" value="<?php echo h($primaryProviderApiKey); ?>" placeholder="optional for SearXNG, required for Brave or SearchAPI.io">
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom:0;">
+                    <h3 style="margin-bottom:10px;">Secondary Provider</h3>
+                    <label>Type</label>
+                    <select name="secondary_provider_type">
+                        <option value=""<?php echo $secondaryProviderType === '' ? ' selected' : ''; ?>>Disabled</option>
+                        <option value="searxng"<?php echo $secondaryProviderType === 'searxng' ? ' selected' : ''; ?>>SearXNG</option>
+                        <option value="brave"<?php echo $secondaryProviderType === 'brave' ? ' selected' : ''; ?>>Brave Search API</option>
+                        <option value="searchapi_google"<?php echo $secondaryProviderType === 'searchapi_google' ? ' selected' : ''; ?>>SearchAPI.io (Google)</option>
+                    </select>
+                    <div class="row">
+                        <label>Base URL</label>
+                        <input type="text" name="secondary_provider_url" value="<?php echo h($secondaryProviderUrl); ?>" placeholder="leave blank if disabled">
+                    </div>
+                    <div class="row">
+                        <label>API Key / Token</label>
+                        <input type="password" name="secondary_provider_api_key" value="<?php echo h($secondaryProviderApiKey); ?>" placeholder="optional for SearXNG, required for Brave or SearchAPI.io">
+                    </div>
+                </div>
+            </div>
+            <div class="row" style="display:flex;gap:10px;flex-wrap:wrap">
+                <button type="submit" name="action" value="save_external_provider_settings" style="width:auto;background:#22c55e;color:#052e16">Save External Search Providers</button>
+            </div>
+        </form>
     </div>
 
     <div class="card">
@@ -512,9 +689,27 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
             <?php
                 $ok = is_array($v1Result['json']) ? (string)($v1Result['json']['ok'] ?? '') : '';
                 $meta = is_array($v1Result['json']) && is_array($v1Result['json']['meta'] ?? null) ? $v1Result['json']['meta'] : [];
+                $aiOverviewText = ai_overview_plain_text($meta);
+                $relatedSearches = related_search_labels($meta);
             ?>
             <?php if (is_array($v1Result['json'])): ?>
-                <div class="row muted">ok: <strong><?php echo h($ok); ?></strong> | cache_hit: <strong><?php echo h((string)($meta['cache_hit'] ?? '')); ?></strong> | count: <strong><?php echo h((string)($meta['count'] ?? '')); ?></strong></div>
+                <div class="row muted">ok: <strong><?php echo h($ok); ?></strong> | cache_hit: <strong><?php echo h((string)($meta['cache_hit'] ?? '')); ?></strong> | count: <strong><?php echo h((string)($meta['count'] ?? '')); ?></strong><?php if (isset($meta['provider'])): ?> | provider: <strong><?php echo h((string)$meta['provider']); ?></strong><?php endif; ?></div>
+            <?php endif; ?>
+            <?php if ($aiOverviewText !== ''): ?>
+                <div class="row">
+                    <h3 style="margin-bottom:8px;">AI Overview</h3>
+                    <pre><?php echo h($aiOverviewText); ?></pre>
+                </div>
+            <?php endif; ?>
+            <?php if (!empty($relatedSearches)): ?>
+                <div class="row">
+                    <h3 style="margin-bottom:8px;">Related Searches</h3>
+                    <div>
+                        <?php foreach ($relatedSearches as $label): ?>
+                            <span class="pill"><?php echo h((string)$label); ?></span>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
             <?php endif; ?>
             <div class="row"><pre><?php echo h((string)$v1Result['raw']); ?></pre></div>
         </div>

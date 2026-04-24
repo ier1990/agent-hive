@@ -29,13 +29,15 @@ if ($clientKey !== '' && !in_array('search', $scopes, true) && !in_array('tools'
 
 // --- search ---
 
-// ---- env ----
-// Search backend (Searx instance)
+// ---- env / provider settings ----
 $SEARX_VERSION = '0.16.0';
-$SEARX_URL  = getenv('SEARX_URL') ?: '';
-if (!$SEARX_URL) {
+$SEARCH_PROVIDER_SETTINGS = search_load_external_provider_settings();
+if (
+  trim((string)$SEARCH_PROVIDER_SETTINGS['primary']['url']) === '' &&
+  trim((string)$SEARCH_PROVIDER_SETTINGS['secondary']['url']) === ''
+) {
   http_response_code(500);
-  echo json_encode(['ok'=>false,'error'=>'server_misconfigured','message'=>'SEARX_URL not set'], JSON_UNESCAPED_SLASHES);
+  echo json_encode(['ok'=>false,'error'=>'server_misconfigured','message'=>'No external search provider configured'], JSON_UNESCAPED_SLASHES);
   exit;
 }
 // Search backend (Searx instance)
@@ -134,6 +136,70 @@ function clean_search_query($q) {
   return $q;
 }
 
+function search_settings_db_path() {
+  return rtrim((string)PRIVATE_ROOT, '/\\') . '/db/codewalker_settings.db';
+}
+
+function search_load_external_provider_settings() {
+  $settings = [
+    'default_provider' => 'primary',
+    'primary' => [
+      'type' => 'searxng',
+      'url' => trim((string)(getenv('SEARX_URL') ?: '')),
+      'api_key' => trim((string)(getenv('IERNC_SEARCH_APIKEY') ?: '')),
+    ],
+    'secondary' => [
+      'type' => '',
+      'url' => '',
+      'api_key' => '',
+    ],
+  ];
+
+  $path = search_settings_db_path();
+  if (!is_file($path) || !is_readable($path)) {
+    return $settings;
+  }
+
+  try {
+    $db = new SQLite3($path);
+    $stmt = $db->prepare('SELECT value FROM settings WHERE key = :k LIMIT 1');
+    $stmt->bindValue(':k', 'search.external.providers', SQLITE3_TEXT);
+    $res = $stmt->execute();
+    $row = $res ? $res->fetchArray(SQLITE3_ASSOC) : null;
+    $db->close();
+    if (!is_array($row) || !isset($row['value'])) {
+      return $settings;
+    }
+    $decoded = json_decode((string)$row['value'], true);
+    if (!is_array($decoded)) {
+      return $settings;
+    }
+
+    if (isset($decoded['default_provider']) && ($decoded['default_provider'] === 'primary' || $decoded['default_provider'] === 'secondary')) {
+      $settings['default_provider'] = $decoded['default_provider'];
+    }
+
+    foreach (['primary', 'secondary'] as $slot) {
+      if (!isset($decoded[$slot]) || !is_array($decoded[$slot])) continue;
+      if (isset($decoded[$slot]['type'])) $settings[$slot]['type'] = trim((string)$decoded[$slot]['type']);
+      if (isset($decoded[$slot]['url'])) $settings[$slot]['url'] = trim((string)$decoded[$slot]['url']);
+      if (isset($decoded[$slot]['api_key'])) $settings[$slot]['api_key'] = trim((string)$decoded[$slot]['api_key']);
+    }
+  } catch (Throwable $e) {
+    return $settings;
+  }
+
+  return $settings;
+}
+
+function search_provider_order($settings) {
+  $defaultProvider = isset($settings['default_provider']) ? (string)$settings['default_provider'] : 'primary';
+  if ($defaultProvider === 'secondary') {
+    return ['secondary', 'primary'];
+  }
+  return ['primary', 'secondary'];
+}
+
 // ---- normalize input (GET or POST JSON) ----
 $body = ($_SERVER['REQUEST_METHOD'] === 'POST') ? json_body() : $_GET;
 
@@ -210,31 +276,51 @@ try {
   if ($row) {
     $json = json_decode($row['body'], true);
     if (is_array($json)) {
-      error_log('Search cache read Success: '.$q, 3, $log_file);
+      //error_log('Search cache read Success: '.$q, 3, $log_file);
       $cachedTop = json_decode((string)($row['top_urls'] ?? '[]'), true);
       if (!is_array($cachedTop)) $cachedTop = [];
+      $cachedResults = isset($json['results']) && is_array($json['results']) ? $json['results'] : [];
+      $cachedProviderMeta = search_cached_meta_from_payload($json);
       if (count($cachedTop) === 0) {
         respond(200, [
           'ok' => false,
-          'error' => 'no_results',
+        'error' => 'no_results',
           'message' => 'No relevant results were found for the query.',
           'meta' => [
             'query' => $q,
             'count' => 0,
             'cached_at' => $row['cached_at'],
             'cache_hit' => true,
+            'provider' => isset($cachedProviderMeta['provider']) ? $cachedProviderMeta['provider'] : 'cache',
             'top_urls' => [],
           ],
           'items' => [],
         ]);
       }
 
-      ok($json['results'] ?? [], ['query'=>$q, 'count'=>count($json['results'] ?? []), 'cached_at'=>$row['cached_at'], 'cache_hit'=>true, 'top_urls'=>$cachedTop]);
+      $cacheMeta = [
+        'query' => $q,
+        'count' => count($cachedResults),
+        'cached_at' => $row['cached_at'],
+        'cache_hit' => true,
+        'provider' => isset($cachedProviderMeta['provider']) ? $cachedProviderMeta['provider'] : 'cache',
+        'top_urls' => $cachedTop,
+      ];
+      if (isset($cachedProviderMeta['provider_slot'])) $cacheMeta['provider_slot'] = $cachedProviderMeta['provider_slot'];
+      if (isset($cachedProviderMeta['search_information'])) $cacheMeta['search_information'] = $cachedProviderMeta['search_information'];
+      if (isset($cachedProviderMeta['search_metadata'])) $cacheMeta['search_metadata'] = $cachedProviderMeta['search_metadata'];
+      if (isset($cachedProviderMeta['search_parameters'])) $cacheMeta['search_parameters'] = $cachedProviderMeta['search_parameters'];
+      if (isset($cachedProviderMeta['ai_overview'])) $cacheMeta['ai_overview'] = $cachedProviderMeta['ai_overview'];
+      if (isset($cachedProviderMeta['related_searches'])) $cacheMeta['related_searches'] = $cachedProviderMeta['related_searches'];
+      if (isset($cachedProviderMeta['images'])) $cacheMeta['images'] = $cachedProviderMeta['images'];
+
+      ok($cachedResults, $cacheMeta);
     }
   }
 } catch (Exception $e) {
   // ignore cache errors
-  error_log('Search cache read error: '.$e->getMessage(), 3, $log_file);
+  // add new line to $log_file for each error with timestamp and error message
+  error_log('Search cache error: '.$e->getMessage()."\n", 3, $log_file);
 }
 
 
@@ -278,23 +364,192 @@ function build_url($baseUrl, $qs, $spaces_as_plus = false) {
   }
   return $url;
 }
+
+function search_provider_request($provider, $qs) {
+  $type = isset($provider['type']) ? trim((string)$provider['type']) : '';
+  $baseUrl = isset($provider['url']) ? trim((string)$provider['url']) : '';
+  $apiKey = isset($provider['api_key']) ? trim((string)$provider['api_key']) : '';
+  if ($type === '' || $baseUrl === '') {
+    return ['ok' => false, 'error' => 'provider_not_configured'];
+  }
+
+  if ($type === 'searchapi_google') {
+    $url = rtrim($baseUrl, '/') . '?' . http_build_query([
+      'engine' => 'google',
+      'q' => (string)$qs['q'],
+      'api_key' => $apiKey,
+    ]);
+    $headers = ['Accept: application/json'];
+    $res = http_get_json($url, $headers);
+    $json = json_decode($res['body'], true);
+    if (!is_array($json)) {
+      return [
+        'ok' => false,
+        'error' => 'invalid_json',
+        'http_code' => (int)$res['code'],
+        'curl_error' => (string)$res['err'],
+        'raw' => (string)$res['body'],
+      ];
+    }
+    $results = [];
+    $organicResults = isset($json['organic_results']) && is_array($json['organic_results']) ? $json['organic_results'] : [];
+    foreach ($organicResults as $item) {
+      if (!is_array($item)) continue;
+      $results[] = [
+        'title' => isset($item['title']) ? (string)$item['title'] : '',
+        'url' => isset($item['link']) ? (string)$item['link'] : '',
+        'content' => isset($item['snippet']) ? (string)$item['snippet'] : '',
+        'engine' => 'searchapi_google',
+      ];
+    }
+    return [
+      'ok' => (int)$res['code'] === 200 && count($results) > 0,
+      'provider_type' => 'searchapi_google',
+      'provider_url' => $baseUrl,
+      'http_code' => (int)$res['code'],
+      'curl_error' => (string)$res['err'],
+      'result_count' => count($results),
+      'raw' => (string)$res['body'],
+      'json' => ['results' => $results],
+      'upstream_json' => $json,
+    ];
+  }
+
+  if ($type === 'brave') {
+    $url = rtrim($baseUrl, '/') . '?' . http_build_query([
+      'q' => (string)$qs['q'],
+      'count' => 20,
+      'search_lang' => (string)$qs['language'],
+      'safesearch' => ((string)$qs['safesearch'] === '0' || (int)$qs['safesearch'] === 0) ? 'off' : 'moderate',
+    ]);
+    $headers = ['Accept: application/json'];
+    if ($apiKey !== '') {
+      $headers[] = 'X-Subscription-Token: ' . $apiKey;
+    }
+    $res = http_get_json($url, $headers);
+    $json = json_decode($res['body'], true);
+    if (!is_array($json)) {
+      return [
+        'ok' => false,
+        'error' => 'invalid_json',
+        'http_code' => (int)$res['code'],
+        'curl_error' => (string)$res['err'],
+        'raw' => (string)$res['body'],
+      ];
+    }
+    $results = [];
+    $webResults = isset($json['web']['results']) && is_array($json['web']['results']) ? $json['web']['results'] : [];
+    foreach ($webResults as $item) {
+      if (!is_array($item)) continue;
+      $results[] = [
+        'title' => isset($item['title']) ? (string)$item['title'] : '',
+        'url' => isset($item['url']) ? (string)$item['url'] : '',
+        'content' => isset($item['description']) ? (string)$item['description'] : '',
+        'engine' => 'brave',
+      ];
+    }
+    return [
+      'ok' => (int)$res['code'] === 200 && count($results) > 0,
+      'provider_type' => 'brave',
+      'provider_url' => $baseUrl,
+      'http_code' => (int)$res['code'],
+      'curl_error' => (string)$res['err'],
+      'result_count' => count($results),
+      'raw' => (string)$res['body'],
+      'json' => ['results' => $results],
+      'upstream_json' => $json,
+    ];
+  }
+
+  $url = build_url(rtrim($baseUrl, '/') . '/search', $qs, false);
+  $headers = ['Accept: application/json'];
+  if ($apiKey !== '') {
+    $headers[] = 'X-API-Key: ' . $apiKey;
+  }
+  $res = http_get_json($url, $headers);
+  $json = json_decode($res['body'], true);
+  return [
+    'ok' => (int)$res['code'] === 200 && is_array($json) && count(isset($json['results']) && is_array($json['results']) ? $json['results'] : []) > 0,
+    'provider_type' => 'searxng',
+    'provider_url' => $baseUrl,
+    'http_code' => (int)$res['code'],
+    'curl_error' => (string)$res['err'],
+    'result_count' => count(isset($json['results']) && is_array($json['results']) ? $json['results'] : []),
+    'raw' => (string)$res['body'],
+    'json' => is_array($json) ? $json : null,
+    'upstream_json' => is_array($json) ? $json : null,
+  ];
+}
+
+function search_cache_payload_from_provider_response($providerResponse, $providerSlotUsed) {
+  $results = isset($providerResponse['json']['results']) && is_array($providerResponse['json']['results']) ? $providerResponse['json']['results'] : [];
+  $upstream = isset($providerResponse['upstream_json']) && is_array($providerResponse['upstream_json']) ? $providerResponse['upstream_json'] : [];
+  return [
+    'results' => array_values($results),
+    'provider' => isset($providerResponse['provider_type']) ? (string)$providerResponse['provider_type'] : '',
+    'provider_slot' => (string)$providerSlotUsed,
+    'upstream' => $upstream,
+  ];
+}
+
+function search_cached_meta_from_payload($payload) {
+  $meta = [];
+  if (!is_array($payload)) return $meta;
+  if (isset($payload['provider'])) $meta['provider'] = (string)$payload['provider'];
+  if (isset($payload['provider_slot'])) $meta['provider_slot'] = (string)$payload['provider_slot'];
+  if (isset($payload['upstream']) && is_array($payload['upstream'])) {
+    $upstream = $payload['upstream'];
+    if (isset($upstream['search_information']) && is_array($upstream['search_information'])) {
+      $meta['search_information'] = $upstream['search_information'];
+    }
+    if (isset($upstream['search_metadata']) && is_array($upstream['search_metadata'])) {
+      $meta['search_metadata'] = $upstream['search_metadata'];
+    }
+    if (isset($upstream['search_parameters']) && is_array($upstream['search_parameters'])) {
+      $meta['search_parameters'] = $upstream['search_parameters'];
+    }
+    if (isset($upstream['ai_overview'])) {
+      $meta['ai_overview'] = $upstream['ai_overview'];
+    }
+    if (isset($upstream['related_searches'])) {
+      $meta['related_searches'] = $upstream['related_searches'];
+    }
+    if (isset($upstream['images'])) {
+      $meta['images'] = $upstream['images'];
+    }
+  }
+  return $meta;
+}
 $qs['format'] = 'json'; // Force JSON response
-$headers = ['Accept: application/json'];
-$url = build_url($SEARX_URL . '/search', $qs, false);
-$res = http_get_json($url,$headers);
-if ($res['code'] !== 200) {
-    bad('Search backend error', 
-    [
-      'details'=>'Backend returned HTTP '.$res['code'].': '.$res['err']
-    ]
-
-  );
+$providerAttempts = [];
+$providerResponse = null;
+$providerSlotUsed = '';
+foreach (search_provider_order($SEARCH_PROVIDER_SETTINGS) as $slot) {
+  $provider = isset($SEARCH_PROVIDER_SETTINGS[$slot]) && is_array($SEARCH_PROVIDER_SETTINGS[$slot]) ? $SEARCH_PROVIDER_SETTINGS[$slot] : [];
+  $attempt = search_provider_request($provider, $qs);
+  $providerAttempts[] = [
+    'slot' => $slot,
+    'type' => isset($provider['type']) ? (string)$provider['type'] : '',
+    'url' => isset($provider['url']) ? (string)$provider['url'] : '',
+    'http_code' => isset($attempt['http_code']) ? (int)$attempt['http_code'] : 0,
+    'curl_error' => isset($attempt['curl_error']) ? (string)$attempt['curl_error'] : '',
+    'error' => isset($attempt['error']) ? (string)$attempt['error'] : '',
+  ];
+  if (!empty($attempt['ok']) && isset($attempt['json']) && is_array($attempt['json'])) {
+    $providerResponse = $attempt;
+    $providerSlotUsed = $slot;
+    break;
+  }
 }
 
-$json = json_decode($res['body'], true);
-if (!is_array($json)) {
-  bad('Invalid JSON response from search backend', ['raw'=>substr($res['body'], 0, 500)]);
+if (!is_array($providerResponse)) {
+  bad('Search backend error', [
+    'details' => 'No configured provider returned a usable response.',
+    'providers' => $providerAttempts,
+  ]);
 }
+
+$json = $providerResponse['json'];
 
 // ---- Extract useful signals (top URLs) ----
 $TOP_URLS_LIMIT = 10;
@@ -325,6 +580,8 @@ if (count($top_urls) === 0) {
       'query' => $q,
       'count' => 0,
       'cache_hit' => false,
+      'provider' => isset($providerResponse['provider_type']) ? (string)$providerResponse['provider_type'] : '',
+      'provider_slot' => $providerSlotUsed,
       'top_urls' => [],
     ],
     'items' => [],
@@ -333,21 +590,45 @@ if (count($top_urls) === 0) {
 
 // ---- save to cache ----
 try {
+  $cacheBody = json_encode(
+    search_cache_payload_from_provider_response($providerResponse, $providerSlotUsed),
+    JSON_UNESCAPED_SLASHES
+  );
+  if (!is_string($cacheBody) || $cacheBody === '') {
+    $cacheBody = isset($providerResponse['raw']) ? (string)$providerResponse['raw'] : '';
+  }
   $insert = $db->prepare('INSERT INTO search_cache_history
     (key_hash, q, body, top_urls, ai_notes, cached_at)
     VALUES (:key_hash, :q, :body, :top_urls, :ai_notes, CURRENT_TIMESTAMP)');
   $insert->bindValue(':key_hash', $hash_key, PDO::PARAM_STR);
   $insert->bindValue(':q', $q, PDO::PARAM_STR);
-  $insert->bindValue(':body', $res['body'], PDO::PARAM_STR);
+  $insert->bindValue(':body', $cacheBody, PDO::PARAM_STR);
   $insert->bindValue(':top_urls', json_encode($top_urls, JSON_UNESCAPED_SLASHES), PDO::PARAM_STR);
   // Placeholder for future: free-form notes about this cached result set.
   $insert->bindValue(':ai_notes', '', PDO::PARAM_STR);
   $insert->execute();
-  error_log('Search cache write Success: '.$q, 3, $log_file);
+  //error_log('Search cache write Success: '.$q, 3, $log_file);
 } catch (Exception $e) {
   // ignore cache write errors write to $log_file
-  error_log('Search cache write error: '.$e->getMessage(), 3, $log_file);
+  error_log('Search cache write error: '.$e->getMessage()."\n", 3, $log_file);
+
 }
 
 // Return the search results in our standard format
-ok($json['results'] ?? [], ['query'=>$q, 'count'=>count($json['results'] ?? []), 'cache_hit'=>false, 'top_urls'=>$top_urls]);
+$responseMeta = [
+  'query'=>$q,
+  'count'=>count($json['results'] ?? []),
+  'cache_hit'=>false,
+  'provider'=>isset($providerResponse['provider_type']) ? (string)$providerResponse['provider_type'] : '',
+  'provider_slot'=>$providerSlotUsed,
+  'top_urls'=>$top_urls
+];
+$upstreamMeta = search_cached_meta_from_payload(search_cache_payload_from_provider_response($providerResponse, $providerSlotUsed));
+if (isset($upstreamMeta['search_information'])) $responseMeta['search_information'] = $upstreamMeta['search_information'];
+if (isset($upstreamMeta['search_metadata'])) $responseMeta['search_metadata'] = $upstreamMeta['search_metadata'];
+if (isset($upstreamMeta['search_parameters'])) $responseMeta['search_parameters'] = $upstreamMeta['search_parameters'];
+if (isset($upstreamMeta['ai_overview'])) $responseMeta['ai_overview'] = $upstreamMeta['ai_overview'];
+if (isset($upstreamMeta['related_searches'])) $responseMeta['related_searches'] = $upstreamMeta['related_searches'];
+if (isset($upstreamMeta['images'])) $responseMeta['images'] = $upstreamMeta['images'];
+
+ok($json['results'] ?? [], $responseMeta);
