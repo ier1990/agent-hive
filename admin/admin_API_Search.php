@@ -335,6 +335,37 @@ function related_search_labels($payload) {
     return $labels;
 }
 
+function pretty_json_text($raw) {
+    $raw = (string)$raw;
+    if ($raw === '') return '';
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) return $raw;
+    $pretty = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    return is_string($pretty) ? $pretty : $raw;
+}
+
+function fetch_search_cache_row_by_id($id) {
+    $path = search_cache_db_path();
+    $id = (int)$id;
+    if ($id < 1 || !is_file($path) || !is_readable($path)) return null;
+    try {
+        $pdo = new PDO('sqlite:' . $path);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $stmt = $pdo->prepare('SELECT id, q, body, top_urls, ai_notes, cached_at FROM search_cache_history WHERE id = :id LIMIT 1');
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!is_array($row)) return null;
+        $row['body_json'] = json_decode((string)($row['body'] ?? ''), true);
+        $row['top_urls_json'] = json_decode((string)($row['top_urls'] ?? '[]'), true);
+        if (!is_array($row['top_urls_json'])) $row['top_urls_json'] = [];
+        return $row;
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
 function fetch_recent_search_cache_rows($limit) {
     $path = search_cache_db_path();
     if (!is_file($path) || !is_readable($path)) return [];
@@ -386,6 +417,8 @@ $secondaryProviderUrl = trim((string)($_POST['secondary_provider_url'] ?? ($_GET
 $secondaryProviderApiKey = trim((string)($_POST['secondary_provider_api_key'] ?? ($_GET['secondary_provider_api_key'] ?? $providerSettings['secondary']['api_key'])));
 $defaultProviderSlot = trim((string)($_POST['default_provider_slot'] ?? ($_GET['default_provider_slot'] ?? $providerSettings['default_provider'])));
 if ($defaultProviderSlot !== 'secondary') $defaultProviderSlot = 'primary';
+$selectedCacheId = (int)($_GET['cache_id'] ?? 0);
+$selectedCacheRow = $selectedCacheId > 0 ? fetch_search_cache_row_by_id($selectedCacheId) : null;
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $action = isset($_POST['action']) ? (string)$_POST['action'] : 'run_test';
@@ -677,7 +710,7 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
                 if (is_array($searxResult['json']) && isset($searxResult['json']['results']) && is_array($searxResult['json']['results'])) $count = count($searxResult['json']['results']);
             ?>
             <div class="row muted">Result count: <strong><?php echo h((string)$count); ?></strong></div>
-            <div class="row"><pre><?php echo h((string)$searxResult['raw']); ?></pre></div>
+            <div class="row"><pre><?php echo h(pretty_json_text((string)$searxResult['raw'])); ?></pre></div>
         </div>
     <?php endif; ?>
 
@@ -711,7 +744,55 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
                     </div>
                 </div>
             <?php endif; ?>
-            <div class="row"><pre><?php echo h((string)$v1Result['raw']); ?></pre></div>
+            <div class="row"><pre><?php echo h(pretty_json_text((string)$v1Result['raw'])); ?></pre></div>
+        </div>
+    <?php endif; ?>
+
+    <?php if (is_array($selectedCacheRow)): ?>
+        <?php
+            $selectedBody = is_array($selectedCacheRow['body_json']) ? $selectedCacheRow['body_json'] : [];
+            $selectedMeta = isset($selectedBody['upstream']) && is_array($selectedBody['upstream']) ? $selectedBody['upstream'] : [];
+            $selectedAiOverview = ai_overview_plain_text($selectedMeta);
+            $selectedRelated = related_search_labels($selectedMeta);
+        ?>
+        <div class="card">
+            <h2>Search Cache Row #<?php echo h((string)$selectedCacheRow['id']); ?></h2>
+            <div class="row muted">Query: <strong><?php echo h((string)($selectedCacheRow['q'] ?? '')); ?></strong> | Cached At: <strong><?php echo h((string)($selectedCacheRow['cached_at'] ?? '')); ?></strong></div>
+            <?php if (!empty($selectedCacheRow['top_urls_json'])): ?>
+                <div class="row">
+                    <h3 style="margin-bottom:8px;">Top URLs</h3>
+                    <div>
+                        <?php foreach ($selectedCacheRow['top_urls_json'] as $url): ?>
+                            <span class="pill"><?php echo h((string)$url); ?></span>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
+            <?php if ($selectedAiOverview !== ''): ?>
+                <div class="row">
+                    <h3 style="margin-bottom:8px;">AI Overview</h3>
+                    <pre><?php echo h($selectedAiOverview); ?></pre>
+                </div>
+            <?php endif; ?>
+            <?php if (!empty($selectedRelated)): ?>
+                <div class="row">
+                    <h3 style="margin-bottom:8px;">Related Searches</h3>
+                    <div>
+                        <?php foreach ($selectedRelated as $label): ?>
+                            <span class="pill"><?php echo h((string)$label); ?></span>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
+            <div class="row">
+                <h3 style="margin-bottom:8px;">Cached JSON</h3>
+                <pre><?php echo h(pretty_json_text((string)($selectedCacheRow['body'] ?? ''))); ?></pre>
+            </div>
+        </div>
+    <?php elseif ($selectedCacheId > 0): ?>
+        <div class="card">
+            <h2>Search Cache Row</h2>
+            <div class="err">Cache row <strong><?php echo h((string)$selectedCacheId); ?></strong> was not found.</div>
         </div>
     <?php endif; ?>
 
@@ -733,7 +814,7 @@ $recentCacheRows = fetch_recent_search_cache_rows(15);
                 <tbody>
                 <?php foreach ($recentCacheRows as $r): ?>
                     <tr>
-                        <td><?php echo h((string)($r['id'] ?? '')); ?></td>
+                        <td><a href="/admin/admin_API_Search.php?cache_id=<?php echo urlencode((string)($r['id'] ?? '')); ?>"><?php echo h((string)($r['id'] ?? '')); ?></a></td>
                         <td><?php echo h((string)($r['cached_at'] ?? '')); ?></td>
                         <td><?php echo h((string)($r['q'] ?? '')); ?></td>
                         <td><?php echo h((string)($r['top_count'] ?? 0)); ?></td>

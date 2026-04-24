@@ -66,6 +66,8 @@ $query='CREATE TABLE IF NOT EXISTS search_cache_history (
   body MEDIUMTEXT NOT NULL,
   top_urls TEXT,
   ai_notes TEXT,
+  provider_type TEXT,
+  provider_slot TEXT,
   cached_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );';
 
@@ -134,6 +136,33 @@ function clean_search_query($q) {
     $q = rtrim($q);
   }
   return $q;
+}
+
+function search_log_line($message) {
+  global $log_file;
+  $message = trim((string)$message);
+  if ($message === '') return;
+  error_log('[' . gmdate('c') . '] ' . $message . "\n", 3, $log_file);
+}
+
+function search_ensure_history_columns($db) {
+  try {
+    $cols = [];
+    $stmt = $db->query('PRAGMA table_info(search_cache_history)');
+    if ($stmt) {
+      while (($row = $stmt->fetch(PDO::FETCH_ASSOC)) !== false) {
+        if (isset($row['name'])) $cols[(string)$row['name']] = true;
+      }
+    }
+    if (!isset($cols['provider_type'])) {
+      $db->exec('ALTER TABLE search_cache_history ADD COLUMN provider_type TEXT');
+    }
+    if (!isset($cols['provider_slot'])) {
+      $db->exec('ALTER TABLE search_cache_history ADD COLUMN provider_slot TEXT');
+    }
+  } catch (Exception $e) {
+    search_log_line('search schema ensure failed: ' . $e->getMessage());
+  }
 }
 
 function search_settings_db_path() {
@@ -258,6 +287,7 @@ try {
   $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
   $db->exec($query);
   $db->exec($query_idx);
+  search_ensure_history_columns($db);
 
   $TTL_DAYS = 365; // 1 year TTL for search cache (can be long since we only write new snapshots and never update old ones)
 
@@ -306,6 +336,7 @@ try {
         'provider' => isset($cachedProviderMeta['provider']) ? $cachedProviderMeta['provider'] : 'cache',
         'top_urls' => $cachedTop,
       ];
+      search_log_line('search cache_hit provider=' . (isset($cachedProviderMeta['provider']) ? (string)$cachedProviderMeta['provider'] : 'unknown') . ' slot=' . (isset($cachedProviderMeta['provider_slot']) ? (string)$cachedProviderMeta['provider_slot'] : '') . ' q=' . json_encode($q));
       if (isset($cachedProviderMeta['provider_slot'])) $cacheMeta['provider_slot'] = $cachedProviderMeta['provider_slot'];
       if (isset($cachedProviderMeta['search_information'])) $cacheMeta['search_information'] = $cachedProviderMeta['search_information'];
       if (isset($cachedProviderMeta['search_metadata'])) $cacheMeta['search_metadata'] = $cachedProviderMeta['search_metadata'];
@@ -538,11 +569,13 @@ foreach (search_provider_order($SEARCH_PROVIDER_SETTINGS) as $slot) {
   if (!empty($attempt['ok']) && isset($attempt['json']) && is_array($attempt['json'])) {
     $providerResponse = $attempt;
     $providerSlotUsed = $slot;
+    search_log_line('search upstream_ok provider=' . (isset($attempt['provider_type']) ? (string)$attempt['provider_type'] : '') . ' slot=' . $slot . ' http=' . (isset($attempt['http_code']) ? (int)$attempt['http_code'] : 0) . ' results=' . (isset($attempt['result_count']) ? (int)$attempt['result_count'] : 0) . ' q=' . json_encode($q));
     break;
   }
 }
 
 if (!is_array($providerResponse)) {
+  search_log_line('search upstream_failed q=' . json_encode($q) . ' attempts=' . json_encode($providerAttempts));
   bad('Search backend error', [
     'details' => 'No configured provider returned a usable response.',
     'providers' => $providerAttempts,
@@ -598,16 +631,18 @@ try {
     $cacheBody = isset($providerResponse['raw']) ? (string)$providerResponse['raw'] : '';
   }
   $insert = $db->prepare('INSERT INTO search_cache_history
-    (key_hash, q, body, top_urls, ai_notes, cached_at)
-    VALUES (:key_hash, :q, :body, :top_urls, :ai_notes, CURRENT_TIMESTAMP)');
+    (key_hash, q, body, top_urls, ai_notes, provider_type, provider_slot, cached_at)
+    VALUES (:key_hash, :q, :body, :top_urls, :ai_notes, :provider_type, :provider_slot, CURRENT_TIMESTAMP)');
   $insert->bindValue(':key_hash', $hash_key, PDO::PARAM_STR);
   $insert->bindValue(':q', $q, PDO::PARAM_STR);
   $insert->bindValue(':body', $cacheBody, PDO::PARAM_STR);
   $insert->bindValue(':top_urls', json_encode($top_urls, JSON_UNESCAPED_SLASHES), PDO::PARAM_STR);
   // Placeholder for future: free-form notes about this cached result set.
   $insert->bindValue(':ai_notes', '', PDO::PARAM_STR);
+  $insert->bindValue(':provider_type', isset($providerResponse['provider_type']) ? (string)$providerResponse['provider_type'] : '', PDO::PARAM_STR);
+  $insert->bindValue(':provider_slot', (string)$providerSlotUsed, PDO::PARAM_STR);
   $insert->execute();
-  //error_log('Search cache write Success: '.$q, 3, $log_file);
+  search_log_line('search cache_write provider=' . (isset($providerResponse['provider_type']) ? (string)$providerResponse['provider_type'] : '') . ' slot=' . $providerSlotUsed . ' q=' . json_encode($q));
 } catch (Exception $e) {
   // ignore cache write errors write to $log_file
   error_log('Search cache write error: '.$e->getMessage()."\n", 3, $log_file);
