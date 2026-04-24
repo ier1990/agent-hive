@@ -83,7 +83,6 @@ $KNOWN_SCOPES = [
   'models',
   'story',
   'agent',
-  'answer',
   'auth',
   'ping',
   'releases'

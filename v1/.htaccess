@@ -24,7 +24,6 @@ RewriteRule ^chat/completions$ chat/completions/index.php [QSA,NC,L]
 
 # Existing routes (current layout)
 RewriteRule ^receiving/?$           receiving/receiving.php [QSA,NC,L]
-RewriteRule ^answer/?$              answer/index.php        [QSA,NC,L]
 RewriteRule ^search/cache/?$        search/cache/index.php  [QSA,NC,L]
 RewriteRule ^search/?$              search/index.php        [QSA,NC,L]
 
