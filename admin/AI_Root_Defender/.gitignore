@@ -1,0 +1,34 @@
+# Reference/example code imported for reuse inspiration
+.b/
+AI.zip
+
+# Virtual environment
+.venv/
+venv/
+
+# Runtime/local artifacts
+data/
+memory/
+logs/
+notes/*
+!notes/.gitkeep
+bh/*
+!bh/
+!bh/blueprint.md
+config/tools.json
+config/settings.json
+__pycache__/
+bin/__pycache__/
+providers/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.log
+
+# Local planning/design notes
+1_plan.md
+agent_bash_plan.md
+memory_logs.md
+notes.md
+tools.md
+turns_loop.md

@@ -1,0 +1,87 @@
+{
+  "bash": {
+    "enabled": true,
+    "read_only_enabled": true,
+    "db_path": "./bh/bash_history.db",
+    "execution_timeout_seconds": 30,
+    "max_command_length": 1200,
+    "max_output_bytes": 12000,
+    "proposal_limit": 100,
+    "allowed_commands": [
+      "pwd",
+      "ls",
+      "find",
+      "rg",
+      "grep",
+      "cat",
+      "sed",
+      "head",
+      "tail",
+      "wc",
+      "stat",
+      "file",
+      "df",
+      "du",
+      "ps",
+      "free",
+      "journalctl",
+      "systemctl",
+      "uptime",
+      "ss",
+      "lsblk",
+      "mount",
+      "ip",
+      "uname",
+      "hostname",
+      "date",
+      "whoami",
+      "id",
+      "sqlite3"
+    ],
+    "blocked_tokens": [
+      "|",
+      ";",
+      "&&",
+      "||",
+      ">",
+      ">>",
+      "<",
+      "sudo",
+      "curl",
+      "wget",
+      "ssh",
+      "scp",
+      "rsync",
+      "rm",
+      "mv",
+      "cp",
+      "chmod",
+      "chown",
+      "mkdir",
+      "rmdir",
+      "touch"
+    ],
+    "disallowed_commands": [],
+    "disallowed_tokens": [],
+    "allowed_roots": [
+      "/"
+    ],
+    "proposal_store_backend": "sqlite",
+    "proposal_jsonl_mirror": true,
+    "proposal_jsonl_dir": "./bh/events",
+    "prompt_context": {
+      "enabled": true,
+      "include_allowed_commands": true,
+      "include_blocked_tokens": true,
+      "include_single_command_examples": true,
+      "recent_commands_count": 5,
+      "top_commands_count": 5
+    }
+  },
+  "memory": {
+    "enabled": true
+  },
+  "search": {
+    "enabled": false
+  }
+}

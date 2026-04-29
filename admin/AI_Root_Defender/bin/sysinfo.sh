@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SYSINFO_DEBUG="${SYSINFO_DEBUG:-1}"
+
+debug_enabled=0
+case "${SYSINFO_DEBUG}" in
+  1|true|TRUE|yes|YES|on|ON) debug_enabled=1 ;;
+esac
+
+# Robust primary IPv4 (global-scope)
+PRIMARY_IP="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1 || true)"
+[[ -z "$PRIMARY_IP" ]] && PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+
+HOSTNAME_FQDN="$(hostname -f 2>/dev/null || hostname)"
+MACHINE_ID="$(cat /etc/machine-id 2>/dev/null || echo unknown)"
+HOST_ID="${MACHINE_ID}:${HOSTNAME_FQDN}:${PRIMARY_IP}"
+
+TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Collect system info
+UPTIME_HUMAN="$(uptime -p || true)"
+UPTIME_SECS="$(cut -d' ' -f1 /proc/uptime 2>/dev/null | cut -d. -f1 || echo 0)"
+LOAD="$(cut -d ' ' -f1-3 < /proc/loadavg)"
+# Memory with "available" (older distros may lack this field)
+if free -m | awk 'NR==2 && $7 ~ /^[0-9]+$/' >/dev/null 2>&1; then
+  MEM="$(free -m | awk 'NR==2 {printf "%sMB used / %sMB total (avail %sMB)", $3, $2, $7}')"
+else
+  MEM="$(free -m | awk '/Mem:/ {printf "%sMB used / %sMB total", $3, $2}')"
+fi
+DISK_ROOT="$(df -h / | awk 'NR==2 {print $3 " used / " $2 " total (" $5 " used)"}')"
+CPU_MODEL="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | xargs || true)"
+CPU_COUNT="$(nproc || echo 1)"
+OS="$(grep -m1 PRETTY_NAME /etc/os-release | cut -d= -f2- | tr -d '"' || echo unknown)"
+KERNEL="$(uname -r)"
+PHP_VERSION="$( { php -v | head -n1 | awk '{print $2}'; } 2>/dev/null || echo "not installed")"
+PUBLIC_IP="$(curl -fsS --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null || echo "unknown")"
+
+# ---- Build each optional JSON chunk properly ----
+DOCKER_JSON=""
+if command -v docker >/dev/null 2>&1; then
+  running="$(docker ps -q 2>/dev/null | wc -l || echo 0)"
+  total="$(docker ps -aq 2>/dev/null | wc -l || echo 0)"
+  DOCKER_JSON="$(jq -nc --argjson r "$running" --argjson t "$total" \
+    '{docker:{containers_running:$r,containers_total:$t}}')"
+fi
+
+NVIDIA_JSON=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+  mapfile -t _g <<<"$(nvidia-smi \
+    --query-gpu=name,driver_version,memory.total,temperature.gpu,power.draw,utilization.gpu \
+    --format=csv,noheader,nounits 2>/dev/null || true)"
+  if ((${#_g[@]})); then
+    IFS=',' read -r g_name g_drv g_vram g_temp g_power g_util <<<"${_g[0]}"
+    # trim & keep only digits for numeric fields
+    g_name="$(echo "$g_name" | xargs)"
+    g_drv="$(echo "$g_drv" | xargs)"
+    g_vram="$(echo "$g_vram" | tr -dc '0-9')"
+    g_temp="$(echo "$g_temp" | tr -dc '0-9')"
+    g_power="$(echo "$g_power" | tr -dc '0-9.')"   # watts, may be empty
+    g_util="$(echo "$g_util" | tr -dc '0-9')"      # percent, may be empty
+    NVIDIA_JSON="$(jq -nc \
+      --arg name "$g_name" \
+      --arg drv  "$g_drv" \
+      --arg vram "$g_vram" \
+      --arg temp "$g_temp" \
+      --arg power "$g_power" \
+      --arg util  "$g_util" \
+      '{gpu:{
+          name:$name,
+          driver:$drv,
+          vram_mb:($vram|tonumber? // 0),
+          temp_c:($temp|tonumber? // null),
+          power_w:($power|tonumber? // null),
+          util_pct:($util|tonumber? // null)
+      }}')"
+  fi
+fi
+
+
+OLLAMA_JSON=""
+if command -v ollama >/dev/null 2>&1; then
+  ov="$(ollama --version 2>/dev/null | awk '{print $NF}' || true)"
+  [[ -n "$ov" ]] && OLLAMA_JSON="$(jq -nc --arg v "$ov" '{ollama:{version:$v}}')"
+fi
+
+
+
+# Ensure jq (or graceful failure)
+if ! command -v jq >/dev/null 2>&1; then
+  maybe_install_jq || { echo "ERROR: jq not found. Set ALLOW_AUTO_INSTALL_JQ=1 to auto-install, or install manually."; exit 1; }
+fi
+
+# Older curl versions do not support --retry-all-errors.
+CURL_RETRY_ARGS=( --retry 3 )
+if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+  CURL_RETRY_ARGS+=( --retry-all-errors )
+fi
+
+# Build JSON and send
+payload_file="$(mktemp)"
+resp_file="$(mktemp)"
+cleanup() {
+  rm -f "$payload_file" "$resp_file"
+}
+trap cleanup EXIT
+
+jq -nc \
+  --arg service "$SERVICE" \
+  --arg db "$DB" \
+  --arg host "$HOST_ID" \
+  --arg ts "$TS" \
+  --arg hostname "$HOSTNAME_FQDN" \
+  --arg primary_ip "$PRIMARY_IP" \
+  --arg uptime "$UPTIME_HUMAN" \
+  --arg uptime_s "$UPTIME_SECS" \
+  --arg load "$LOAD" \
+  --arg mem "$MEM" \
+  --arg disk "$DISK_ROOT" \
+  --arg cpu "$CPU_MODEL" \
+  --arg cpu_count "$CPU_COUNT" \
+  --arg os "$OS" \
+  --arg kernel "$KERNEL" \
+  --arg php "$PHP_VERSION" \
+  --arg pubip "$PUBLIC_IP" \
+  --arg docker "$DOCKER_JSON" \
+  --arg gpu "$NVIDIA_JSON" \
+  --arg ollama "$OLLAMA_JSON" '
+  ($docker|fromjson? // {}) as $d |
+  ($gpu|fromjson? // {})    as $g |
+  ($ollama|fromjson? // {}) as $o |
+  {
+    service:$service,
+    db:$db,
+    host:$host,
+    ts:$ts,
+    identity:{ hostname:$hostname, primary_ip:$primary_ip, machine:"'"$MACHINE_ID"'" },
+    sysinfo:{
+      uptime:$uptime,
+      uptime_seconds: ($uptime_s|tonumber? // 0),
+      load:$load,
+      memory:$mem,
+      disk:$disk,
+      cpu:$cpu,
+      cpu_count: ($cpu_count|tonumber? // 1),
+      os:$os,
+      kernel:$kernel,
+      php_version:$php,
+      public_ip:$pubip
+    }
+  } + $d + $g + $o
+' > "$payload_file"
+
+if (( debug_enabled )); then
+  echo "[sysinfo] endpoint=$API" >&2
+  echo "[sysinfo] service=$SERVICE db=$DB host=$HOST_ID" >&2
+  if [[ -n "${IER_API_KEY:-}" ]]; then
+    echo "[sysinfo] api_key=present" >&2
+  else
+    echo "[sysinfo] api_key=missing" >&2
+  fi
+fi
+
+http_code=""
+curl_rc=0
+if ! http_code="$(curl -sS -o "$resp_file" -w '%{http_code}' -X POST "$API" \
+     -H 'Content-Type: application/json' \
+     "${API_KEY_HEADER[@]}" \
+     --connect-timeout 5 --max-time 20 \
+     "${CURL_RETRY_ARGS[@]}" \
+     --data-binary "@$payload_file")"; then
+  curl_rc=$?
+fi
+
+if (( curl_rc != 0 )); then
+  echo "ERROR: curl failed while sending sysinfo (exit=$curl_rc)" >&2
+  if (( debug_enabled )); then
+    echo "[sysinfo] payload_path=$payload_file response_path=$resp_file" >&2
+    if [[ -s "$resp_file" ]]; then
+      echo "[sysinfo] response_body:" >&2
+      cat "$resp_file" >&2
+    fi
+  fi
+  exit "$curl_rc"
+fi
+
+if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+  echo "ERROR: sysinfo POST failed with HTTP $http_code" >&2
+  if [[ -s "$resp_file" ]]; then
+    echo "Response body:" >&2
+    cat "$resp_file" >&2
+  fi
+  exit 22
+fi
+
+if (( debug_enabled )); then
+  echo "[sysinfo] success http=$http_code" >&2
+  if [[ -s "$resp_file" ]]; then
+    echo "[sysinfo] response_body:" >&2
+    cat "$resp_file" >&2
+  fi
+fi
+
