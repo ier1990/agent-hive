@@ -18,6 +18,7 @@ from providers.base import BaseProvider
 # Maps provider slug -> "module.path.ClassName"
 _REGISTRY: dict[str, str] = {
     "local_openai_compat": "providers.local_openai_compat.LocalOpenAICompatProvider",
+    "remote_openai_sdk":   "providers.remote_openai_sdk.RemoteOpenAiSdkProvider",
     "claude_sdk":          "providers.claude_sdk.ClaudeSdkProvider",
 }
 

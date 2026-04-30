@@ -90,6 +90,32 @@ See your most frequently used approved commands:
 # Shows top 20 commands with execution count
 ```
 
+### One-Shot JSON Run
+
+```bash
+python3 agent_bash.py --non-interactive \
+  --prompt "Check Apache and MySQL logs for fresh errors and summarize them" \
+  --json
+```
+
+### Cron Task Queue
+
+Drop a task JSON file into `/web/private/guardian_tasks/`:
+
+```json
+{
+  "prompt": "Check Apache access and error logs for /v1/ failures from LAN clients.",
+  "provider": "0",
+  "max_turns": 6
+}
+```
+
+Then process one task:
+
+```bash
+python3 agent_bash.py --non-interactive --claim-task --json
+```
+
 ## Environment
 
 - Python: 3.8+

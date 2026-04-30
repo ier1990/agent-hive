@@ -54,7 +54,7 @@ DEFAULT_TOOL_SETTINGS: Dict[str, Any] = {
 # ------------------------------------------------------------------ #
 # providers list: index 0 = primary. Add more entries for bigger or  #
 # smaller models. Switch at runtime: /provider <idx|label>           #
-# Supported slugs: local_openai_compat, claude_sdk                   #
+# Supported slugs: local_openai_compat, remote_openai_sdk, claude_sdk #
 # Also accepts legacy format: {name: "slug", slug: {config}}         #
 # ------------------------------------------------------------------ #
 DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
@@ -73,6 +73,16 @@ DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
     },
     "turn_generator": {
         "max_history_messages": 20,
+        "usage_tracking": {
+            "enabled": True,
+            "show_after_turn": True,
+            "chars_per_token": 4.0,
+        },
+    },
+    "task_queue": {
+        "enabled": True,
+        "dir": "",
+        "claim_glob": "*.json",
     },
     "provider": {
         # "active" can be an integer index or a label/slug string.
@@ -88,6 +98,15 @@ DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
                 "timeout":  60,
             },
             # Example: add more providers here for larger/smaller models
+            # {
+            #     "name":     "remote_openai_sdk",
+            #     "label":    "openai",
+            #     "base_url": "https://api.openai.com/v1",
+            #     "model":    "gpt-5-mini",
+            #     "api_key":  "",
+            #     "timeout":  90,
+            #     "reasoning_effort": "medium",
+            # },
             # {
             #     "name":     "local_openai_compat",
             #     "label":    "big",
@@ -115,6 +134,13 @@ DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
             "model":      "claude-sonnet-4-6",
             "max_tokens": 1024,
             "api_key":    "",
+        },
+        "remote_openai_sdk": {
+            "base_url": "https://api.openai.com/v1",
+            "model": "gpt-5-mini",
+            "api_key": "",
+            "timeout": 90,
+            "reasoning_effort": "medium",
         },
     },
 }

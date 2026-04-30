@@ -10,6 +10,7 @@ the conversation history and the provider call.
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -133,6 +134,7 @@ class TurnGenerator:
         runtime_access_context: str = "",
         extra_system_context: str = "",
         max_history_messages: int = 20,
+        chars_per_token: float = 4.0,
     ) -> None:
         """
         Args:
@@ -149,8 +151,15 @@ class TurnGenerator:
             self._max_history_messages = max(1, int(max_history_messages))
         except Exception:
             self._max_history_messages = 20
+        try:
+            self._chars_per_token = float(chars_per_token)
+        except Exception:
+            self._chars_per_token = 4.0
+        if self._chars_per_token <= 0:
+            self._chars_per_token = 4.0
         self._base_system_prompt: str = _load_system_prompt()
         self._system_prompt: str = ""
+        self._last_usage: dict[str, Any] = {}
         self._rebuild_system_prompt()
         self._history: list[dict[str, Any]] = []
 
@@ -192,6 +201,10 @@ class TurnGenerator:
         # local_openai_compat uses base_url; other providers may not expose one.
         endpoint = self._provider_cfg.get("base_url")
         return str(endpoint) if endpoint else "n/a"
+
+    @property
+    def last_usage(self) -> dict[str, Any]:
+        return dict(self._last_usage)
 
     def switch_provider(self, slug: str, cfg_entry: dict[str, Any]) -> None:
         """Hot-swap the underlying provider without losing conversation history.
@@ -286,11 +299,25 @@ class TurnGenerator:
 
         # Sliding window to avoid blowing the context limit.
         window = self._history[-self._max_history_messages:]
+        system_chars = len(self._system_prompt)
+        input_chars = sum(len(str(msg.get("content", "") or "")) for msg in window)
+        input_messages = len(window)
 
         raw_text = self._provider.generate(
             messages=window,
             system=self._system_prompt,
         )
+        output_chars = len(raw_text)
+        self._last_usage = {
+            "history_messages": input_messages,
+            "max_history_messages": self._max_history_messages,
+            "system_chars": system_chars,
+            "input_chars": input_chars,
+            "output_chars": output_chars,
+            "estimated_prompt_tokens": self._estimate_tokens(system_chars + input_chars),
+            "estimated_output_tokens": self._estimate_tokens(output_chars),
+            "estimated_total_tokens": self._estimate_tokens(system_chars + input_chars + output_chars),
+        }
 
         self._history.append({"role": "assistant", "content": raw_text})
 
@@ -317,3 +344,6 @@ class TurnGenerator:
             lines.append(f"stderr:\n{stderr}")
 
         self._history.append({"role": "user", "content": "\n".join(lines)})
+
+    def _estimate_tokens(self, char_count: int) -> int:
+        return int(max(1, math.ceil(float(max(0, char_count)) / self._chars_per_token))) if char_count > 0 else 0

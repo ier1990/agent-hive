@@ -35,6 +35,8 @@ Later layers override earlier layers.
 - Other agent-wide runtime settings
 - Shell defaults such as max turns and debug default
 - Turn generator limits such as conversation history window
+- Turn usage tracking defaults for prompt and response size estimates
+- Task queue defaults for cron or file-drop execution
 - Editor selection preferences
 - Compose behavior defaults
 

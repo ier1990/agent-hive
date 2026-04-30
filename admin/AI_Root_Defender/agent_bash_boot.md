@@ -45,6 +45,14 @@ No markdown fences. Raw JSON only.
 `pwd` `ls` `find` `rg` `grep` `cat` `sed` `head` `tail` `wc` `stat` `file`
 `df` `du` `ps` `free` `uptime` `journalctl` `systemctl status` `netstat` `ss` `lsof`
 
+## Command Semantics
+
+- For `grep`, `rg`, and `zgrep`:
+  - exit `0` means matches found
+  - exit `1` means no matches found and is not an error
+  - exit `2` or higher means a real error
+- Do not treat grep-style exit `1` as a failure by itself. Use the command output and the exit code meaning together.
+
 ## Example Turn
 User asks: "How much disk space is left on /web?"
 

@@ -38,6 +38,15 @@ Private live overrides belong in:
 
 More detail is documented in [config/blueprint.md](/web/html/admin/AI_Root_Defender/config/blueprint.md:1).
 
+Provider slugs:
+
+- `local_openai_compat`
+  - Ollama, LM Studio, vLLM, and similar local `/v1` servers
+- `remote_openai_sdk`
+  - OpenAI-hosted models such as `gpt-5-mini`
+- `claude_sdk`
+  - Anthropic Claude via optional SDK
+
 ## Boot Contracts
 
 The active default boot prompt is still [agent_bash_boot.md](/web/html/admin/AI_Root_Defender/agent_bash_boot.md:1).
@@ -57,6 +66,38 @@ cd /web/html/admin/AI_Root_Defender
 source ./activate.sh
 python3 agent_bash.py
 ```
+
+## Non-Interactive Mode
+
+You can run one task without entering the shell:
+
+```bash
+python3 agent_bash.py --non-interactive \
+  --provider 0 \
+  --prompt "Check recent Apache and MySQL errors and summarize the likely issue" \
+  --json
+```
+
+You can also pass extra context from a file:
+
+```bash
+python3 agent_bash.py --non-interactive \
+  --prompt "Review this context and continue diagnosis" \
+  --context-file /tmp/guardian_context.txt \
+  --json
+```
+
+For cron-style file drop processing, place JSON task files in:
+
+- `/web/private/guardian_tasks/`
+
+and run:
+
+```bash
+python3 agent_bash.py --non-interactive --claim-task --json
+```
+
+Completed tasks are moved into `done/` and failed ones into `failed/` under that queue directory, with a `.result.json` file saved beside each processed task.
 
 Manual setup also works:
 
@@ -82,6 +123,25 @@ python3 agent_bash.py
 - `/bh recent`
 - `/bh top`
 - `/contract <json>`
+
+## Task File Shape
+
+Minimal task JSON:
+
+```json
+{
+  "prompt": "Check Apache and MySQL logs for problems affecting /v1/ clients.",
+  "provider": "0",
+  "max_turns": 6
+}
+```
+
+Optional fields:
+
+- `context`
+- `context_file`
+- `provider`
+- `max_turns`
 
 ## Storage Model
 

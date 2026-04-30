@@ -13,7 +13,17 @@
     "preview_chars": 160
   },
   "turn_generator": {
-    "max_history_messages": 20
+    "max_history_messages": 20,
+    "usage_tracking": {
+      "enabled": true,
+      "show_after_turn": true,
+      "chars_per_token": 4.0
+    }
+  },
+  "task_queue": {
+    "enabled": true,
+    "dir": "",
+    "claim_glob": "*.json"
   },
   "provider": {
     "active": 0,
