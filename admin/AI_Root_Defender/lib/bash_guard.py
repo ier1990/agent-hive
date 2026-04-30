@@ -98,6 +98,8 @@ def validate_command(command: str, cwd: Path, cfg: Dict[str, Any], repo_root: Pa
             continue
         if t.startswith("-"):
             continue
+        if "*" in t or "?" in t:
+            return {"ok": False, "error": f"wildcards are not expanded in this harness: {t}"}
         if "://" in t:
             return {"ok": False, "error": f"url-like token blocked: {t}"}
 
@@ -209,6 +211,8 @@ def build_prompt_context(cfg: Dict[str, Any], store: ProposalStore) -> str:
         lines.append("- Apache /v1/ log search by IP suffix: rg -n '([.]191|[.]152).*/v1/' /var/log/apache2")
         lines.append("- Apache error scan for API routes: rg -n -e '/v1/' -e 'error' -e 'AH[0-9]+' /var/log/apache2")
         lines.append("- Recent API hits in one file: rg -n '/v1/' /var/log/apache2/access.log")
+        lines.append("- Auth failures without globs: rg -n 'Failed password' /var/log")
+        lines.append("- Do not use auth.log* or access.log* wildcards; this harness does not expand shell globs")
 
     recent_count = int(prompt_cfg.get("recent_commands_count", 5) or 0)
     if recent_count > 0:
@@ -233,4 +237,3 @@ def build_prompt_context(cfg: Dict[str, Any], store: ProposalStore) -> str:
                     lines.append("- [" + str(count) + "x] " + cmd)
 
     return "\n".join(lines).strip()
-

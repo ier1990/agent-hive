@@ -1208,9 +1208,9 @@ def _init_runtime(
     editor_candidates = editor_cfg.get("candidates", [])
     active_editor = get_available_editor(preferred=preferred_editor, candidates=editor_candidates if isinstance(editor_candidates, list) else None)
     try:
-        blocked_tool_retry_limit = int(shell_cfg.get("blocked_tool_retry_limit", 2) or 2)
+        blocked_tool_retry_limit = int(shell_cfg.get("blocked_tool_retry_limit", 3) or 3)
     except Exception:
-        blocked_tool_retry_limit = 2
+        blocked_tool_retry_limit = 3
     blocked_tool_retry_limit = max(0, blocked_tool_retry_limit)
 
     return {
@@ -1313,7 +1313,10 @@ def _run_non_interactive(
 
         while True:
             try:
-                raw_contract = turn_gen.generate_contract(current_prompt, context=current_context)
+                raw_contract = turn_gen.generate_contract(
+                    current_prompt,
+                    context=_merge_context(current_context, _turn_budget_note(turn_count, max_turns)),
+                )
             except RuntimeError as exc:
                 result["error"] = str(exc)
                 if output_json:
@@ -1359,7 +1362,14 @@ def _run_non_interactive(
                 blocked_command = str((outcome.get("contract") or {}).get("next_tool") or "")
                 try:
                     raw_contract = turn_gen.generate_contract(
-                        _blocked_tool_retry_prompt(blocked_command, blocked_error)
+                        _blocked_tool_retry_prompt(
+                            blocked_command,
+                            blocked_error,
+                            blocked_tool_retry_limit - blocked_retries,
+                            turn_count,
+                            max_turns,
+                        ),
+                        context=_turn_budget_note(turn_count, max_turns),
                     )
                 except RuntimeError as exc:
                     result["error"] = str(exc)
@@ -1393,6 +1403,56 @@ def _run_non_interactive(
                     tags=["ai", "retry", "non-interactive"],
                 )
 
+            if (
+                turn_gen is not None
+                and outcome.get("blocked_error")
+                and not outcome.get("proposal_id")
+                and not outcome.get("is_final")
+                and blocked_retries >= blocked_tool_retry_limit
+            ):
+                blocked_error = str(outcome.get("blocked_error") or "tool blocked")
+                try:
+                    raw_contract = turn_gen.generate_contract(
+                        _final_summary_prompt(
+                            "blocked tool retries exhausted: " + blocked_error,
+                            turn_count,
+                            max_turns,
+                        ),
+                        context=_turn_budget_note(turn_count, max_turns),
+                    )
+                except RuntimeError as exc:
+                    result["error"] = str(exc)
+                    if output_json:
+                        print(json.dumps(result, ensure_ascii=True, indent=2))
+                    else:
+                        print(f"[Provider error]: {exc}")
+                    return 1, result
+                except ValueError as exc:
+                    result["error"] = str(exc)
+                    if output_json:
+                        print(json.dumps(result, ensure_ascii=True, indent=2))
+                    else:
+                        print(f"[Parse error]: {exc}")
+                    return 1, result
+
+                turn_count += 1
+                outcome = _process_contract(
+                    raw_contract,
+                    turn_count=turn_count,
+                    max_turns=max_turns,
+                    debug_enabled=debug_enabled,
+                    cwd=cwd,
+                    cfg=cfg,
+                    repo_root=repo_root,
+                    store=store,
+                    render_output=not output_json,
+                )
+                logger.add_turn(
+                    turn_count=turn_count,
+                    contract=raw_contract,
+                    tags=["ai", "forced-final", "non-interactive"],
+                )
+
             while outcome.get("proposal_id"):
                 proposal_id = int(outcome["proposal_id"])
                 tool_result = _handle_tools(f"/bh approve {proposal_id}", cwd, cfg, repo_root, store, quiet=output_json)
@@ -1419,7 +1479,8 @@ def _run_non_interactive(
 
                 try:
                     raw_contract = turn_gen.generate_contract(
-                        "Tool executed automatically in non-interactive mode. Continue analysis using that result."
+                        "Tool executed automatically in non-interactive mode. Continue analysis using that result.",
+                        context=_turn_budget_note(turn_count, max_turns),
                     )
                 except RuntimeError as exc:
                     result["error"] = str(exc)
@@ -1548,20 +1609,68 @@ def _reset_after_max_turns(logger: SessionLogger, turn_gen: Optional[TurnGenerat
     return 0
 
 
-def _blocked_tool_retry_prompt(command: str, error: str) -> str:
+def _turn_budget_note(turn_count: int, max_turns: int) -> str:
+    remaining = max(0, int(max_turns) - int(turn_count))
+    return (
+        "[Turn budget]\n"
+        + "Turns used in this conversation: "
+        + str(turn_count)
+        + " / "
+        + str(max_turns)
+        + "\n"
+        + "Turns remaining before forced final: "
+        + str(remaining)
+    )
+
+
+def _merge_context(base_context: Optional[str], extra_context: str) -> Optional[str]:
+    base = str(base_context or "").strip()
+    extra = str(extra_context or "").strip()
+    if base and extra:
+        return extra + "\n\n" + base
+    if extra:
+        return extra
+    if base:
+        return base
+    return None
+
+
+def _blocked_tool_retry_prompt(command: str, error: str, retries_remaining: int, turn_count: int, max_turns: int) -> str:
     command_text = str(command or "").strip()
     error_text = str(error or "tool blocked").strip()
     return (
         "Your previous proposed tool was not allowed by the shell guard.\n"
+        + "Wrist slap: do not use blocked tokens, shell wildcards, redirects, angle brackets, chaining, or sudo.\n"
         + "Blocked command: "
         + (command_text or "(none)")
         + "\n"
         + "Reason: "
         + error_text
         + "\n"
-        + "Please try again with exactly one different allowed shell command."
-        + " No pipes, redirects, chaining, or sudo."
-        + " If no safe single command fits, set state=needs_input and ask a concise question."
+        + "Please propose exactly one different safer shell command now."
+        + " If the command needs a placeholder or wildcard, do not use it."
+        + " Use a concrete file, search a directory directly, or choose another single read-only command."
+        + "\n"
+        + "Retry chances remaining before you must stop and ask for input: "
+        + str(max(0, retries_remaining))
+        + "\n"
+        + "Turn budget remaining before forced final: "
+        + str(max(0, int(max_turns) - int(turn_count)))
+        + "\n"
+        + "If no safe single command fits, set state=needs_input and ask one concise question."
+    )
+
+
+def _final_summary_prompt(reason: str, turn_count: int, max_turns: int) -> str:
+    return (
+        "Stop proposing tools now.\n"
+        + "Give a final concise summary of what you learned, what was blocked or missing, and the safest next human step.\n"
+        + "You must return state=final with next_tool=null.\n"
+        + "Reason for forced wrap-up: "
+        + str(reason or "guard requested final summary")
+        + "\n"
+        + "Turns remaining before forced final: "
+        + str(max(0, int(max_turns) - int(turn_count)))
     )
 
 
@@ -1884,7 +1993,10 @@ def run_shell() -> int:
             composed_context = None  # consume once
 
             try:
-                raw_contract = turn_gen.generate_contract(line, context=ctx)
+                raw_contract = turn_gen.generate_contract(
+                    line,
+                    context=_merge_context(ctx, _turn_budget_note(turn_count, max_turns)),
+                )
             except RuntimeError as exc:
                 print(f"[Provider error]: {exc}")
                 continue
@@ -1925,7 +2037,14 @@ def run_shell() -> int:
                 print(f"[Guard]: Proposed tool not allowed: {blocked_error}. Asking Guardian to try again.")
                 try:
                     raw_contract = turn_gen.generate_contract(
-                        _blocked_tool_retry_prompt(blocked_command, blocked_error)
+                        _blocked_tool_retry_prompt(
+                            blocked_command,
+                            blocked_error,
+                            blocked_tool_retry_limit - blocked_retries,
+                            turn_count,
+                            max_turns,
+                        ),
+                        context=_turn_budget_note(turn_count, max_turns),
                     )
                 except RuntimeError as exc:
                     print(f"[Provider error]: {exc}")
@@ -1948,6 +2067,51 @@ def run_shell() -> int:
                     turn_count=turn_count,
                     contract=raw_contract,
                     tags=["ai", "retry", "compose"] if ctx else ["ai", "retry"],
+                )
+                if turn_gen is not None:
+                    _print_usage_summary(turn_gen.last_usage, show=show_usage_after_turn)
+                is_final = bool(outcome.get("is_final"))
+
+            if (
+                turn_gen is not None
+                and outcome.get("blocked_error")
+                and not outcome.get("proposal_id")
+                and not outcome.get("is_final")
+                and blocked_retries >= blocked_tool_retry_limit
+            ):
+                blocked_error = str(outcome.get("blocked_error") or "tool blocked")
+                print("[Guard]: Retry budget exhausted. Asking Guardian for a final summary instead of another tool.")
+                try:
+                    raw_contract = turn_gen.generate_contract(
+                        _final_summary_prompt(
+                            "blocked tool retries exhausted: " + blocked_error,
+                            turn_count,
+                            max_turns,
+                        ),
+                        context=_turn_budget_note(turn_count, max_turns),
+                    )
+                except RuntimeError as exc:
+                    print(f"[Provider error]: {exc}")
+                    break
+                except ValueError as exc:
+                    print(f"[Parse error]: {exc}")
+                    break
+
+                turn_count += 1
+                outcome = _process_contract(
+                    raw_contract,
+                    turn_count=turn_count,
+                    max_turns=max_turns,
+                    debug_enabled=debug_enabled,
+                    cwd=cwd,
+                    cfg=cfg,
+                    repo_root=repo_root,
+                    store=store,
+                )
+                logger.add_turn(
+                    turn_count=turn_count,
+                    contract=raw_contract,
+                    tags=["ai", "forced-final", "compose"] if ctx else ["ai", "forced-final"],
                 )
                 if turn_gen is not None:
                     _print_usage_summary(turn_gen.last_usage, show=show_usage_after_turn)
@@ -2002,7 +2166,10 @@ def run_shell() -> int:
                         break
 
                 try:
-                    raw_contract = turn_gen.generate_contract(followup_prompt)
+                    raw_contract = turn_gen.generate_contract(
+                        followup_prompt,
+                        context=_turn_budget_note(turn_count, max_turns),
+                    )
                 except RuntimeError as exc:
                     print(f"[Provider error]: {exc}")
                     break

@@ -2,7 +2,7 @@
   "shell": {
     "debug_default": false,
     "max_turns_per_session": 11,
-    "blocked_tool_retry_limit": 2
+    "blocked_tool_retry_limit": 3
   },
   "editor": {
     "command": "",

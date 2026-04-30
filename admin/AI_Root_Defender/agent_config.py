@@ -61,7 +61,7 @@ DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
     "shell": {
         "debug_default": False,
         "max_turns_per_session": 11,
-        "blocked_tool_retry_limit": 2,
+        "blocked_tool_retry_limit": 3,
     },
     "editor": {
         "command": "",
