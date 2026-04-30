@@ -7,16 +7,25 @@
 
 ---
 
-AgentHive is a self-hosted ops memory + AI backend: job queues, admin tools, notes/search, agent runtime tools, and API endpoints.
-Designed to be the first platform installed on every server — private by default, with optional public APIs.
+AgentHive is a self-hosted ops memory + AI backend for Linux/web teams: job queues, admin tools, human notes, command history tooling, safe agent runtimes, and API endpoints.
+Designed to be one of the first platform layers installed on every server: private by default, LAN-first, and still automation-friendly.
+
+## Why teams install AgentHive
+- Keep ops memory local: Human Notes, bash history, search history, and AI enrichments in your own SQLite stores
+- Run AI-assisted engineering workflows without giving direct shell execution to the model by default
+- Standardize AI provider setup once, then reuse it across tools and agent runtimes
+- Expose stable `/v1/*` routes for automations, scripts, and agent-to-agent integrations
+- Start simple on LAN, then harden for internet-facing deployments when needed
 
 ## What you can do with it
 - **Analyze and modernize codebases** with AI-powered CodeWalker (security audits, test strategies, documentation, refactoring)
 - Scan and understand legacy projects (older PHP, Python, shell scripts)
 - Run an interactive AI engineering shell with local tools, durable memory, and admin-managed dynamic tools
+- Run **AI Root Defender**: a read-only diagnostic shell with human-approved command execution
+- Build reusable instruction workflows with **AI Templates** under `/admin/AI_Templates/`
 - Run queued AI jobs (workers, logs, retries)
 - Manage shared AI connections (OpenAI / Anthropic / OpenRouter / Ollama / LM Studio)
-- Store and search operational notes and history
+- Store and search human notes and operational history
 - Expose safe endpoints for automation and agent-to-agent workflows
 
 ## Quick start
@@ -33,45 +42,19 @@ curl -s http://localhost/v1/health | jq
 curl -s http://localhost/v1/ping | jq
 ```
 
-
-## Guest inbox (safe-by-default)
-`/v1/inbox` supports a restricted, no-auth **guest** mode for simple webhooks and dropbox-style ingest.
-
-- Default guest table: `guest_inbox`
-- Guest mode blocks reads: `GET /v1/inbox` returns `403` unless you provide an API key
-- Guest writes are constrained to a dedicated DB + allowlisted tables
-
-Example guest ingest:
-
-```bash
-curl -X POST http://localhost/v1/inbox \
-  -H "Content-Type: application/json" \
-  -d '{"db":"guest","table":"guest_inbox","message":"hello","ts":"2026-02-02T00:00:00Z"}'
-```
-
-To disable guest mode entirely (require API key for everything):
-- Set `INBOX_PUBLIC_MODE=off`
-
-Relevant env vars:
-- `INBOX_PUBLIC_MODE` = `guest` | `off` | `open`
-- `INBOX_GUEST_DB` (default `/web/private/db/inbox_guest.db`)
-- `INBOX_GUEST_TABLES` (default `guest_inbox`)
-- `INBOX_GUEST_MAX_BODY_BYTES` (default `200000`)
-
-
-
 AgentHive is for small teams who want AI assistance without sending their data to the cloud.
 
-AgentHive is not “just notes” or “just an API”.
+AgentHive is not just a note-taking app or just an API.
 
 It’s a **machine memory layer** with **time-aware search history** feeding **AI enrichment**, under a stable `/v1/*` API contract.
 
 This project captures:
 
-- Bash history
+- Human notes
+- Bash history (separate, faster command-focused workflows)
 - Search queries & results (with ranking snapshots)
 - AI-generated summaries & metadata
-- Operational notes and human logs
+- Human-authored operational logs
 
 …and continuously enriches them using local or external AI models via a `/v1/*`-style API.
 
@@ -84,7 +67,7 @@ Capture operational reality in a way that’s cheap to store, easy to audit, and
 - Logs
 - History
 - Jobs
-- Notes
+- Human Notes
 - Incidents
 - Decisions
 
@@ -128,7 +111,13 @@ with:
 ## What’s included today
 
 - **/v1 API** endpoints (JSON, key + scope auth, rate limited)
-- **Notes** web app at `/admin/notes/` (SQLite-backed, includes Jobs, Bash History, DB Browser, and **Notes Debug** health view at `?view=notes_debug`)
+- **Human Notes** at `/admin/notes/?view=human`:
+  - streamlined note capture where humans paste content and save quickly
+  - AI-assisted title + tag creation to reduce manual note cleanup
+  - actively replacing older notes workflows
+- **Bash History** at `/admin/notes/?view=bash_history`:
+  - separated from Human Notes for faster command search and review
+  - tuned for shell-history lookup instead of general note browsing
 - **Chat routing** at `/v1/chat/` (autoselector) and `/v1/chat/completions` (OpenAI-compatible shim)
 - **Admin tools** under `/admin/` (protected with a “bootstrap token” flow to avoid fresh-install lockouts)
 - **AI Agent Shell** under `/admin/AI/`:
@@ -138,6 +127,18 @@ with:
   - dynamic approved tool bridge into `/web/private/db/agent_tools.db`
   - optional durable memory store in `/web/private/db/memory/agent_ai_memory.db`
 - **CodeWalker** — AI-powered codebase analysis and modernization tool
+- **AI Root Defender** under `/admin/AI_Root_Defender/`:
+  - read-only Linux/webserver diagnostics with command governance
+  - deterministic turn loop (`continue`, `needs_input`, `final`)
+  - human approval gate before command execution
+  - proposal/audit history stored in `bh/` for reviewability
+- **AI Templates** under `/admin/AI_Templates/`:
+  - template editor and registry for reusable prompt/instruction envelopes
+  - deterministic variable compilation and portable JSON backup flow
+  - provider-agnostic structure for consistent runs and easier debugging
+- **Admin module scaffold** under `/admin/`:
+  - use `admin/admin_*.php` entrypoints to add focused custom admin modules quickly
+  - works well with the existing protected admin console workflow
 - **MotherQue admin area** moved to `/admin/AI_MotherQue/`
 - **AI Story** collaborative narrative engine:
   - Admin UI: `/admin/admin_AI_Story.php`
@@ -177,7 +178,7 @@ php admin/codewalker_cli.php --action=audit /path/to/file.php
 php admin/codewalker_cli.php --action=auto
 
 # View results
-open http://localhost/admin/codewalker.php?view=dashboard
+xdg-open http://localhost/admin/codewalker.php?view=dashboard
 ```
 
 **Configuration:**
@@ -236,6 +237,29 @@ python3 /web/html/admin/AI/agent.py
 ```
 
 ![AgentHive AI Shell](agent_shell.png)
+
+### AI Root Defender
+
+AI Root Defender is a local-first diagnostic shell built for production safety: the model can investigate and propose commands, but execution remains behind a human approval gate.
+
+**Key Features:**
+- **Read-only command policy**: blocks dangerous patterns (no chaining, redirects, pipes, or `sudo`)
+- **Approval workflow**: proposed commands are approved/rejected by a human before execution
+- **Deterministic turns**: consistent `continue`, `needs_input`, and `final` state loop
+- **Auditability**: proposal + execution history persisted in `bh/` with event mirroring
+- **Provider profiles**: supports local OpenAI-compatible backends plus hosted providers
+- **Non-interactive mode**: one-shot JSON runs plus cron-friendly task queue processing from `/web/private/guardian_tasks/`
+- **Context visibility**: estimates prompt/output token usage after runs to help with smaller models
+
+**Quick Start:**
+```bash
+cd /web/html/admin/AI_Root_Defender
+./bin/install.sh
+source ./activate.sh
+python3 agent_bash.py
+```
+
+See `/web/html/admin/AI_Root_Defender/README.md` for non-interactive mode, task-file queues, config model, and safety details.
 
 ### MotherQue
 
@@ -331,7 +355,8 @@ sudo chmod 0640 /web/private/api_keys.json
 5) Hit health:
 
 - `GET /v1/health` (should return JSON)
-- `GET /admin/notes/?view=human` (Notes UI)
+- `GET /admin/notes/?view=human` (Human Notes UI)
+- `GET /admin/notes/?view=bash_history` (Bash History UI)
 
 ---
 
@@ -364,7 +389,9 @@ Admin pages use `lib/auth/auth.php`.
 Design goal: a fresh install should not lock you out.
 
 - On first run, a one-time bootstrap token lives at `${PRIVATE_ROOT}/bootstrap_admin_token.txt`
-- You can “claim” admin from LAN or with `?bootstrap=<token>`- After creating your first admin account, you are redirected to the installer to finish setup- After an admin exists, normal session login applies
+- You can "claim" admin from LAN or with `?bootstrap=<token>`
+- After creating your first admin account, you are redirected to the installer to finish setup
+- After an admin exists, normal session login applies
 
 ---
 
@@ -397,6 +424,7 @@ The git ignore policy is set up so you don't accidentally commit private data.
 	- **Wrapper path is always `PRIVATE_ROOT/scripts` — not configurable per-server**
 - `admin/`
 	- Admin tools (protected)
+	- `admin_*.php` pattern for quickly adding custom single-file admin modules
 	- `AI/` split Python agent shell + prompt/config docs
 	- `AI_MotherQue/` queue UI and scripts
 	- `admin_installer.php` — step-by-step setup wizard (auto-creates dirs, sets env, provisions API keys)
@@ -430,6 +458,12 @@ Common causes in this repo:
 
 ## Docs
 
+- `admin/AI_Root_Defender/README.md` — safe diagnostic shell, approval flow, and non-interactive/task queue usage
+- `admin/AI/README.md` — interactive AI agent shell runtime, tools contract, and profile model
+- `admin/AI_Templates/README.md` — template system concepts, compilation model, and tests
+- `admin/AI_MotherQue/README.md` — queue/admin area runtime notes
+- `admin/notes/README.md` — Human Notes and Bash History behavior, storage, permissions, and LAN guard details
+- `PROVIDER_CONFIG_GUIDE.md` — provider setup across OpenAI/Anthropic/OpenRouter/Ollama/LM Studio/custom
 - `bootstrap.md` — deeper notes on bootstrap behavior and config
 - `copilot-instructions.md` — repo conventions and operational guidance
 
@@ -484,7 +518,7 @@ Example layout:
 /var/www/html      -> UI / Admin
 /web               -> Working domain
 /web/api           -> Internal + external API
-/web/notes         -> Human + AI notes
+/web/notes         -> Human Notes + AI enrichments
 /web/codewalker    -> Self-analysis & refactor
 /web/files         -> File browser
 /web/memory        -> AgentHive DBs
@@ -493,7 +527,7 @@ Example layout:
 4) **Private domain memory**
 
 - SQLite + (optional) vector DB
-- human notes + AI notes
+- Human Notes + AI enrichments
 - code history + decision memory
 - sync only when explicitly enabled
 
