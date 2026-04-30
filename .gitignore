@@ -41,6 +41,7 @@ music/
 /.admin/
 /admin/.admin/
 admin/AI_Media/
+admin/AI/compose_ideals.md
 
 # --- Releases (generated artifacts) ---
 v1/releases/*

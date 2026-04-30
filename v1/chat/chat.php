@@ -35,9 +35,6 @@ if (isset($_GET['ping'])) {
 // chat.php
 require_once dirname(__DIR__, 2) . '/lib/bootstrap.php';
 
-// Single-call guard (rate limits, auth, logging should be inside bootstrap.php)
-api_guard_once('chat', /* needsTools? */ false);
-
 // ---- Helpers ----
 if (!function_exists('http_get_json')) {
   function http_get_json(string $url, array $headers = [], int $ct=2, int $t=10): array {
@@ -126,13 +123,25 @@ function normalize_messages($messages): array {
   return $out;
 }
 
+function enforce_chat_scope(): void {
+  $scopes = isset($GLOBALS['APP_SCOPES']) && is_array($GLOBALS['APP_SCOPES']) ? $GLOBALS['APP_SCOPES'] : [];
+  $clientKey = isset($GLOBALS['APP_CLIENT_KEY']) ? (string)$GLOBALS['APP_CLIENT_KEY'] : '';
+  if ($clientKey !== '' && !in_array('chat', $scopes, true) && !in_array('tools', $scopes, true)) {
+    respond_error(403, 'forbidden', ['reason' => 'missing_chat_scope']);
+  }
+}
+
 
 // ---- Read input ----
 $body = read_json_body();
+$runTools = !empty($body['run_tools']);             // optional single-pass tool exec
+
+// Single-call guard (rate limits, auth, logging should be inside bootstrap.php)
+api_guard_once('chat', $runTools);
+enforce_chat_scope();
 
 $backend  = strtolower($body['backend'] ?? 'auto'); // openai|ollama|lmstudio|auto
 $model    = $body['model']   ?? null;               // e.g. gpt-4o-mini, llama3.1:8b, etc.
-$runTools = !empty($body['run_tools']);             // optional single-pass tool exec
 $tools    = $body['tools']   ?? [];                 // optional tool defs (names/args)
 $stream   = (bool)($body['stream'] ?? false);       // streaming not implemented here
 $temperature = $body['temperature'] ?? 0.2;
@@ -142,25 +151,39 @@ $messages = normalize_messages($body['messages'] ?? null);
 if (!$messages) respond_error(400, 'messages[] required');
 
 // ---- Config ----
-// Source of truth: CodeWalker settings DB (admin AI Config).
-$cw = function_exists('codewalker_llm_settings') ? codewalker_llm_settings() : [];
-$cwBackend = strtolower((string)($cw['backend'] ?? 'lmstudio'));
-$cwBaseUrl = (string)($cw['base_url'] ?? '');
-$cwApiKey  = (string)($cw['api_key'] ?? '');
-$cwModel   = (string)($cw['model'] ?? '');
-$cwTimeout = (int)($cw['model_timeout_seconds'] ?? 0);
-if ($cwTimeout < 1) $cwTimeout = 900;
+$resolved = function_exists('ai_settings_resolve_request_profile')
+  ? ai_settings_resolve_request_profile($body)
+  : ['ok' => false, 'error' => 'ai_settings_unavailable'];
+if (empty($resolved['ok'])) {
+  respond_error(400, (string)($resolved['error'] ?? 'invalid_provider_profile'), [
+    'selector' => (string)($resolved['selector'] ?? ''),
+  ]);
+}
 
-$OPENAI_API_KEY = ($cwBackend === 'openai') ? $cwApiKey : '';
-$OLLAMA_HOST    = ($cwBackend === 'ollama') ? ($cwBaseUrl ?: 'http://127.0.0.1:11434') : 'http://127.0.0.1:11434';
-$LLM_BASE_URL   = ($cwBackend === 'lmstudio' || $cwBackend === 'openai_compat' || $cwBackend === 'openai-compat') ? $cwBaseUrl : '';
-$LLM_API_KEY    = ($cwBackend === 'lmstudio' || $cwBackend === 'openai_compat' || $cwBackend === 'openai-compat') ? $cwApiKey : '';
+$settings = isset($resolved['settings']) && is_array($resolved['settings']) ? $resolved['settings'] : [];
+$selectedProvider = strtolower((string)($settings['provider'] ?? 'local'));
+$selectedBaseUrl = (string)($settings['base_url'] ?? '');
+$selectedApiKey = (string)($settings['api_key'] ?? '');
+$selectedModel = (string)($settings['model'] ?? '');
+$selectedTimeout = (int)($settings['timeout_seconds'] ?? 0);
+if ($selectedTimeout < 1) $selectedTimeout = 900;
+
+$OPENAI_API_KEY = ($selectedProvider === 'openai') ? $selectedApiKey : '';
+$OLLAMA_HOST = ($selectedProvider === 'ollama') ? ai_base_without_v1($selectedBaseUrl) : 'http://127.0.0.1:11434';
+if ($OLLAMA_HOST === '') $OLLAMA_HOST = 'http://127.0.0.1:11434';
+$LLM_BASE_URL = $selectedBaseUrl;
+$LLM_API_KEY = $selectedApiKey;
+
+header('X-AI-Provider: ' . $selectedProvider);
+if (!empty($resolved['selected_profile_hash'])) {
+  header('X-AI-Provider-Hash: ' . (string)$resolved['selected_profile_hash']);
+}
 
 // ---- Choose backend ----
 if ($backend === 'auto') {
-  // Use CodeWalker backend directly.
-  if ($cwBackend === 'openai_compat' || $cwBackend === 'openai-compat') $backend = 'lmstudio';
-  else $backend = $cwBackend ?: 'lmstudio';
+  if ($selectedProvider === 'openai') $backend = 'openai';
+  elseif ($selectedProvider === 'ollama') $backend = 'ollama';
+  else $backend = 'lmstudio';
 }
 
 // Reject streaming for now (implement server-sent events later)
@@ -193,8 +216,8 @@ if (empty($ids)) {
   ]);
 }
 
-if (($model === null || $model === '') && $cwModel !== '') {
-  $model = $cwModel;
+if (($model === null || $model === '') && $selectedModel !== '') {
+  $model = $selectedModel;
 }
 
 if ($model && !in_array($model, $ids, true)) {
@@ -212,7 +235,7 @@ if ($model && !in_array($model, $ids, true)) {
 
 
 
-  if ($model === null || $model === '') $model = ($cwModel !== '' ? $cwModel : 'default');
+  if ($model === null || $model === '') $model = ($selectedModel !== '' ? $selectedModel : 'default');
 
   $payload = [
     'model'       => $model,
@@ -227,7 +250,7 @@ if ($model && !in_array($model, $ids, true)) {
   ];
 
   // If bootstrap doesn’t define these, add the simple fallbacks I posted earlier
-  $resp = http_post_json($endpoint, $payload, $headers, 2, $cwTimeout);
+  $resp = http_post_json($endpoint, $payload, $headers, 2, $selectedTimeout);
   out_or_error($resp);
 }
 
@@ -237,7 +260,7 @@ if ($backend === 'openai') {
   if (!$OPENAI_API_KEY) respond_error(500, 'OPENAI_API_KEY missing');
 
   $endpoint = 'https://api.openai.com/v1/chat/completions';
-  if ($model === null || $model === '') $model = ($cwModel !== '' ? $cwModel : 'gpt-4o-mini');
+  if ($model === null || $model === '') $model = ($selectedModel !== '' ? $selectedModel : 'gpt-4o-mini');
 
   $payload = [
     'model'       => $model,
@@ -256,7 +279,7 @@ if ($backend === 'openai') {
     CURLOPT_POST => true,
     CURLOPT_POSTFIELDS => json_encode($payload),
     CURLOPT_CONNECTTIMEOUT => 2,
-    CURLOPT_TIMEOUT => $cwTimeout,
+    CURLOPT_TIMEOUT => $selectedTimeout,
   ]);
   $resp = curl_exec($ch);
   $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -298,7 +321,7 @@ if ($backend === 'openai') {
 if ($backend === 'ollama') {
   $endpoint = rtrim($OLLAMA_HOST, '/') . '/api/chat';
   // Prefer a small default CPU model if not provided
-  $model = $model ?: ($cwModel !== '' ? $cwModel : 'gemma2:2b');
+  $model = $model ?: ($selectedModel !== '' ? $selectedModel : 'gemma2:2b');
 
   // Convert OpenAI-style -> Ollama format
   $msgs = [];
@@ -320,7 +343,7 @@ if ($backend === 'ollama') {
     CURLOPT_POST => true,
     CURLOPT_POSTFIELDS => json_encode($payload),
     CURLOPT_CONNECTTIMEOUT => 2,
-    CURLOPT_TIMEOUT => $cwTimeout,
+    CURLOPT_TIMEOUT => $selectedTimeout,
   ]);
   $resp = curl_exec($ch);
   $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);

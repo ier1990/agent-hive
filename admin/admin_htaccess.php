@@ -27,6 +27,8 @@ error_reporting(E_ALL);
 require_once __DIR__ . '/../lib/bootstrap.php';
 require_once APP_LIB . '/auth/auth.php';
 auth_require_admin();
+$min_pass_len = 6;
+
 
 require_once __DIR__ . '/../lib/http.php';
 
@@ -78,12 +80,10 @@ function admin_htpasswd_username_ok(string $u): bool
     return (bool)preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/', $u);
 }
 
-function admin_htpasswd_hash_apr1(string $password): ?string
+function admin_htpasswd_hash_bcrypt(string $password): ?string
 {
-    // Prefer APR1-MD5 which Apache supports broadly. Use system crypt() if available.
-    $salt = substr(strtr(base64_encode(random_bytes(12)), '+/', './'), 0, 8);
-    $hash = crypt($password, '$apr1$' . $salt . '$');
-    if (is_string($hash) && strpos($hash, '$apr1$') === 0) {
+    $hash = password_hash($password, PASSWORD_BCRYPT);
+    if (is_string($hash) && $hash !== '') {
         return $hash;
     }
     return null;
@@ -98,8 +98,8 @@ function admin_htpasswd_set_user(string $path, string $username, string $passwor
     if (!is_dir($dir)) return ['ok' => false, 'error' => 'htpasswd_dir_missing', 'detail' => $dir];
     if (!is_writable($dir) && !is_file($path)) return ['ok' => false, 'error' => 'htpasswd_dir_not_writable', 'detail' => $dir];
 
-    $hash = admin_htpasswd_hash_apr1($password);
-    if ($hash === null || $hash === '') return ['ok' => false, 'error' => 'hash_failed', 'detail' => 'crypt($apr1$) unavailable'];
+    $hash = admin_htpasswd_hash_bcrypt($password);
+    if ($hash === null || $hash === '') return ['ok' => false, 'error' => 'hash_failed', 'detail' => 'password_hash(PASSWORD_BCRYPT) failed'];
 
     $lines = [];
     if (is_file($path)) {
@@ -382,7 +382,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['action'])) {
         $password2 = (string)($_POST['password2'] ?? '');
         if (!admin_htpasswd_username_ok($username)) {
             $errors[] = 'Invalid username (allowed: letters/numbers/._-; must start with letter/number).';
-        } elseif (strlen($password) < 10) {
+        } elseif (strlen($password) < $min_pass_len) {
             $errors[] = 'Password must be at least 10 characters.';
         } elseif ($password !== $password2) {
             $errors[] = 'Passwords do not match.';
@@ -489,6 +489,22 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['do_auth_test'
     <?php endforeach; ?>
 
     <h2>Admin Basic Auth (.htaccess + htpasswd)</h2>
+
+    <h2>Auth Status</h2>
+    <?php if ($authAuthed): ?>
+        <p>Logged in as: <strong><?php echo html((string)$authUserNow); ?></strong></p>
+    <?php else: ?>
+        <p class="muted">Not logged in (no PHP_AUTH_USER / REMOTE_USER).</p>
+    <?php endif; ?>
+    <p>
+        <a href="?logout=1" onclick="return confirm('Force a Basic-Auth logout prompt?');">Log out</a>
+        <span class="muted">(forces a 401; browser behavior varies)</span>
+    </p>
+    <ul class="muted">
+        <li>Browsers cache Basic Auth credentials; there is no perfect server-side logout.</li>
+        <li>If Apache can’t read <code><?php echo html($htpasswdPath); ?></code>, fix permissions/ownership under <code>/web/private/.passwords</code>.</li>
+    </ul>
+
     <div class="panel">
         <div><strong>.htaccess:</strong> <code><?php echo html($htaccessPath); ?></code> <?php echo is_file($htaccessPath) ? '<span class="ok">(exists)</span>' : '<span class="muted">(missing)</span>'; ?></div>
         <div><strong>AuthUserFile:</strong> <code><?php echo html($htpasswdPath); ?></code> <?php echo is_file($htpasswdPath) ? '<span class="ok">(exists)</span>' : '<span class="muted">(missing)</span>'; ?></div>
@@ -501,16 +517,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['do_auth_test'
                 echo '<span class="muted">(file not found)</span>';
             }
         ?></pre>
-        <div class="muted" style="margin-top:8px;">This is Apache Basic Auth for <code>/admin</code>. It is separate from the app-level device/session auth.</div>
-
-        <h3 style="margin:12px 0 6px 0;">Write default <code>/admin/.htaccess</code></h3>
-        <div class="muted">Overwrites <code>/admin/.htaccess</code> with the recommended template (creates a timestamped backup if the file already exists).</div>
-        <pre class="surface"><?php echo html($recommendedHtaccess); ?></pre>
-        <form method="post" style="margin-top:10px;" onsubmit="return confirm('Overwrite /admin/.htaccess with the template? A backup will be created.');">
-            <input type="hidden" name="csrf_token" value="<?php echo html(csrf_token()); ?>" />
-            <input type="hidden" name="action" value="write_admin_htaccess" />
-            <button type="submit" class="btn-dark">Write Template</button>
-        </form>
+        
 
         <h3 style="margin:14px 0 6px 0;">Create / update Apache Basic Auth user</h3>
         <div class="muted">Adds or updates a user entry in <code><?php echo html($htpasswdPath); ?></code>. Passwords are never displayed back.</div>
@@ -535,64 +542,24 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['do_auth_test'
                 <button type="submit" class="btn-dark">Create/Update User</button>
             </div>
         </form>
+
+
+
+<div class="muted" style="margin-top:8px;">This is Apache Basic Auth for <code>/admin</code>. It is separate from the app-level device/session auth.</div>
+
+        <h3 style="margin:12px 0 6px 0;">Write default <code>/admin/.htaccess</code></h3>
+        <div class="muted">Overwrites <code>/admin/.htaccess</code> with the recommended template (creates a timestamped backup if the file already exists).</div>
+        <pre class="surface"><?php echo html($recommendedHtaccess); ?></pre>
+        <form method="post" style="margin-top:10px;" onsubmit="return confirm('Overwrite /admin/.htaccess with the template? A backup will be created.');">
+            <input type="hidden" name="csrf_token" value="<?php echo html(csrf_token()); ?>" />
+            <input type="hidden" name="action" value="write_admin_htaccess" />
+            <button type="submit" class="btn-dark">Write Template</button>
+        </form>
+
     </div>
 
-    <h2>Auth Status</h2>
-    <?php if ($authAuthed): ?>
-        <p>Logged in as: <strong><?php echo html((string)$authUserNow); ?></strong></p>
-    <?php else: ?>
-        <p class="muted">Not logged in (no PHP_AUTH_USER / REMOTE_USER).</p>
-    <?php endif; ?>
-    <p>
-        <a href="?logout=1" onclick="return confirm('Force a Basic-Auth logout prompt?');">Log out</a>
-        <span class="muted">(forces a 401; browser behavior varies)</span>
-    </p>
 
-    <h2>Notes</h2>
-    <ul class="muted">
-        <li>Browsers cache Basic Auth credentials; there is no perfect server-side logout.</li>
-        <li>If Apache can’t read <code><?php echo html($htpasswdPath); ?></code>, fix permissions/ownership under <code>/web/private/.passwords</code>.</li>
-    </ul>
 
-    <h2>Rewrite Rules Viewer</h2>
-    <div class="muted" style="margin:6px 0 10px 0;">
-        Viewing: <strong><?php echo html($viewTitle); ?></strong>
-        <?php if ($viewHtaccessPath !== ''): ?>
-            · file: <code><?php echo html($viewHtaccessPath); ?></code>
-        <?php endif; ?>
-        · <a href="?view=v1">Public API</a>
-        | <a href="?view=admin">Admin</a>
-    </div>
-    <?php if (!empty($rulesData['errors'])): ?>
-        <div class="error">
-            <strong>Errors:</strong>
-            <ul>
-                <?php foreach ($rulesData['errors'] as $error): ?>
-                    <li><?php echo html($error); ?></li>
-                <?php endforeach; ?>
-            </ul>
-        </div>
-    <?php endif; ?>
-    <table>
-        <thead>
-            <tr>
-                <th>Line</th>
-                <th>Pattern</th>
-                <th>Target</th>
-                <th>Flags</th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php foreach ($rulesData['rules'] as $rule): ?>
-                <tr>
-                    <td><?php echo html((string)$rule['line']); ?></td>
-                    <td><code><?php echo html($rule['pattern']); ?></code></td>             
-                    <td><code><?php echo html($rule['target']); ?></code></td>
-                    <td><?php echo html($rule['flags']); ?></td>
-                </tr>
-            <?php endforeach; ?>
-        </tbody>
-    </table>
 
     <h2>Real AuthType Basic Test</h2>
     <p class="muted">This makes a loopback HTTP request and shows the real status + headers (401/200, WWW-Authenticate, Location, etc.).</p>
@@ -712,7 +679,17 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['do_auth_test'
 
 
 
+<?php
 
+
+// display pretty $_SERVER variables for debugging (filtered to relevant keys)
+foreach ($_SERVER as $k => $v) {
+   // if (strpos($k, 'HTTP_') === 0 || in_array($k, ['PHP_AUTH_USER', 'PHP_AUTH_PW', 'REMOTE_USER', 'REQUEST_METHOD', 'REQUEST_URI', 'SCRIPT_NAME', 'DOCUMENT_ROOT'], true)) {
+        echo '<div><strong>' . html($k) . '</strong>: <code>' . html((string)$v) . '</code></div>';
+   // }
+}
+
+?>
 
 
 

@@ -197,7 +197,7 @@ if (!isset($_SESSION['ai_chat_last_debug']) || !is_array($_SESSION['ai_chat_last
 
 $settings = ai_settings_get();
 
-// Load saved connections for connection dropdown
+// Load saved providers for provider dropdown
 $savedConnections = ai_saved_profiles_recent(100);
 
 $ai = new AI_Template([
@@ -223,12 +223,12 @@ if ($selectedTemplate === '') {
     : $builtinTemplateName;
 }
 
-// Connection selection - load full connection config
+// Provider selection - load full provider config
 $selectedConnectionHash = (string)($_POST['connection'] ?? '');
 if ($selectedConnectionHash !== '') {
   $connData = ai_saved_profiles_get($selectedConnectionHash);
   if ($connData) {
-    // Override settings with selected connection
+    // Override settings with selected provider
     $settings = [
       'provider' => (string)($connData['provider'] ?? ''),
       'base_url' => (string)($connData['base_url'] ?? ''),
@@ -347,7 +347,7 @@ $lastDebug = is_array($_SESSION['ai_chat_last_debug']) ? $_SESSION['ai_chat_last
         <div class="text-xs text-slate-400">Uses shared AI settings + AI_Template templates</div>
       </div>
       <div class="flex flex-wrap gap-2">
-        <a class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" href="admin_AI_Setup.php?popup=1&amp;postmessage=1&amp;return=admin_AI_Chat.php<?= $IS_EMBED ? '%3Fembed%3D1' : '' ?>" target="_blank">AI Setup…</a>
+        <a class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" href="admin_AI_Setup.php?popup=1&amp;postmessage=1&amp;return=admin_AI_Chat.php<?= $IS_EMBED ? '%3Fembed%3D1' : '' ?>" target="_blank">AI Providers…</a>
         <a class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" href="admin_AI_Templates.php" target="_blank">AI Templates</a>
         <a class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" href="admin_API_Chat.php" target="_blank">API Chat Tester</a>
       </div>

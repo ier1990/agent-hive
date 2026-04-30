@@ -643,22 +643,110 @@ if (!function_exists('ai_saved_profiles_get')) {
   }
 }
 
+if (!function_exists('ai_saved_profiles_find_by_name')) {
+  function ai_saved_profiles_find_by_name(string $name): ?array {
+    $name = trim($name);
+    if ($name === '') return null;
+
+    $dbPath = ai_saved_profiles_db_path();
+    if (!is_file($dbPath)) return null;
+
+    try {
+      $pdo = new PDO('sqlite:' . $dbPath, null, null, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+      ]);
+      ai_saved_profiles_ensure_schema($pdo);
+      $stmt = $pdo->prepare('SELECT name, provider, base_url, api_key, model, timeout_seconds, hash, created_at
+        FROM ai_saved_profiles
+        WHERE lower(name) = lower(:n)
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT 1');
+      $stmt->bindValue(':n', $name, PDO::PARAM_STR);
+      $stmt->execute();
+      $row = $stmt->fetch();
+      return is_array($row) ? $row : null;
+    } catch (Throwable $t) {
+      return null;
+    }
+  }
+}
+
+if (!function_exists('ai_saved_profile_to_settings')) {
+  function ai_saved_profile_to_settings(array $row): array {
+    $provider = strtolower(trim((string)($row['provider'] ?? 'local')));
+    $baseNoV1 = rtrim((string)($row['base_url'] ?? ''), '/');
+
+    return [
+      'provider' => $provider,
+      'base_url' => ai_base_ensure_v1($baseNoV1),
+      'api_key' => (string)($row['api_key'] ?? ''),
+      'model' => (string)($row['model'] ?? ''),
+      'timeout_seconds' => (int)($row['timeout_seconds'] ?? 120),
+    ];
+  }
+}
+
+if (!function_exists('ai_settings_resolve_request_profile')) {
+  function ai_settings_resolve_request_profile(array $request): array {
+    $result = [
+      'ok' => true,
+      'error' => '',
+      'selector' => '',
+      'selected_profile_hash' => '',
+      'selected_profile_name' => '',
+      'used_saved_profile' => false,
+      'settings' => ai_settings_get(),
+    ];
+
+    $hashKeys = ['provider_hash', 'connection_hash', 'profile_hash', 'provider_profile_hash'];
+    foreach ($hashKeys as $key) {
+      $value = trim((string)($request[$key] ?? ''));
+      if ($value !== '') {
+        $result['selector'] = $value;
+        $row = ai_saved_profiles_get($value);
+        if (!is_array($row)) {
+          $result['ok'] = false;
+          $result['error'] = 'unknown_provider_profile';
+          return $result;
+        }
+        $result['used_saved_profile'] = true;
+        $result['selected_profile_hash'] = (string)($row['hash'] ?? '');
+        $result['selected_profile_name'] = (string)($row['name'] ?? '');
+        $result['settings'] = ai_saved_profile_to_settings($row);
+        return $result;
+      }
+    }
+
+    $nameKeys = ['provider', 'provider_name', 'connection', 'connection_name', 'profile_name'];
+    foreach ($nameKeys as $key) {
+      $value = trim((string)($request[$key] ?? ''));
+      if ($value !== '') {
+        $result['selector'] = $value;
+        $row = ai_saved_profiles_find_by_name($value);
+        if (!is_array($row)) {
+          $result['ok'] = false;
+          $result['error'] = 'unknown_provider_profile';
+          return $result;
+        }
+        $result['used_saved_profile'] = true;
+        $result['selected_profile_hash'] = (string)($row['hash'] ?? '');
+        $result['selected_profile_name'] = (string)($row['name'] ?? '');
+        $result['settings'] = ai_saved_profile_to_settings($row);
+        return $result;
+      }
+    }
+
+    return $result;
+  }
+}
+
 if (!function_exists('ai_saved_profiles_apply_to_active')) {
   function ai_saved_profiles_apply_to_active(string $hash): bool {
     $row = ai_saved_profiles_get($hash);
     if (!is_array($row)) return false;
 
-    $provider = strtolower(trim((string)($row['provider'] ?? 'local')));
-    $baseNoV1 = rtrim((string)($row['base_url'] ?? ''), '/');
-    $base = ai_base_ensure_v1($baseNoV1);
-
-    $candidate = [
-      'provider' => $provider,
-      'base_url' => $base,
-      'api_key' => (string)($row['api_key'] ?? ''),
-      'model' => (string)($row['model'] ?? ''),
-      'timeout_seconds' => (int)($row['timeout_seconds'] ?? 120),
-    ];
+    $candidate = ai_saved_profile_to_settings($row);
 
     $errs = ai_settings_validate($candidate);
     if (!empty($errs)) return false;

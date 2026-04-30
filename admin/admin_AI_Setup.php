@@ -61,17 +61,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_valid($_POST['csrf_token'] ?? 
     }
   }
   
-  // Quick switch between connections
+  // Quick switch between providers
   if ($action === 'activate') {
     $hash = trim($_POST['hash'] ?? '');
     if (ai_saved_profiles_apply_to_active($hash)) {
-      $success = 'Connection activated';
+      $success = 'Provider activated';
     } else {
-      $errors[] = 'Failed to activate connection';
+      $errors[] = 'Failed to activate provider';
     }
   }
   
-  // Save new or edited connection
+  // Save new or edited provider
   if ($action === 'save') {
     $name = trim($_POST['name'] ?? '');
     $provider = trim($_POST['provider'] ?? 'local');
@@ -100,9 +100,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_valid($_POST['csrf_token'] ?? 
       if (!empty($result['ok'])) {
         if ($activate) {
           ai_saved_profiles_apply_to_active($result['hash']);
-          $success = "Connection '{$name}' saved and activated";
+          $success = "Provider '{$name}' saved and activated";
         } else {
-          $success = "Connection '{$name}' saved";
+          $success = "Provider '{$name}' saved";
         }
         // Clear form mode
         header('Location: ?');
@@ -123,7 +123,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_valid($_POST['csrf_token'] ?? 
     }
   }
   
-  // Delete connection
+  // Delete provider
   if ($action === 'delete') {
     $hash = trim($_POST['hash'] ?? '');
     if ($hash) {
@@ -132,7 +132,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_valid($_POST['csrf_token'] ?? 
       $activeHash = ai_saved_profiles_hash(ai_active_profile_candidate($active));
       
       if ($hash === $activeHash) {
-        $errors[] = 'Cannot delete active connection. Switch to another connection first.';
+        $errors[] = 'Cannot delete active provider. Switch to another provider first.';
       } else {
         // Delete from DB
         $dbPath = function_exists('ai_saved_profiles_db_path') ? ai_saved_profiles_db_path() : '/web/private/db/ai_saved_profiles.db';
@@ -146,7 +146,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_valid($_POST['csrf_token'] ?? 
           }
           $stmt = $pdo->prepare('DELETE FROM ai_saved_profiles WHERE hash = ?');
           $stmt->execute([$hash]);
-          $success = 'Connection deleted';
+          $success = 'Provider deleted';
         } catch (Throwable $e) {
           $errors[] = 'Delete failed: ' . $e->getMessage();
         }
@@ -172,7 +172,7 @@ $active = ai_settings_get();
 $activeProfileCandidate = ai_active_profile_candidate($active);
 $activeHash = ai_saved_profiles_hash($activeProfileCandidate);
 
-// Recent connections
+// Recent providers
 $connections = ai_saved_profiles_recent(20);
 
 // Provider presets
@@ -191,7 +191,7 @@ $presets = [
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Connections</title>
+  <title>AI Providers</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="lib/admin_dark.css">
 </head>
@@ -200,8 +200,8 @@ $presets = [
 <?php if(!$IS_EMBED): ?>
 <div class="bg-gradient-to-r from-sky-500 to-indigo-600 text-white py-4 mb-6">
   <div class="container mx-auto px-4">
-    <h1 class="text-xl font-semibold">🤖 AI Connections</h1>
-    <p class="text-sm opacity-90">Manage AI provider connections</p>
+    <h1 class="text-xl font-semibold">🤖 AI Providers</h1>
+    <p class="text-sm opacity-90">Manage saved AI provider profiles</p>
   </div>
 </div>
 <?php endif; ?>
@@ -222,11 +222,11 @@ $presets = [
     </div>
   <?php endif; ?>
 
-  <!-- Active Connection Card -->
+  <!-- Active Provider Card -->
   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
     <div class="flex items-start justify-between">
       <div class="flex-1">
-        <div class="text-xs text-gray-500 mb-1">Active Connection</div>
+        <div class="text-xs text-gray-500 mb-1">Active Provider</div>
         <div class="text-lg font-semibold text-gray-900">
           <?php 
             $activeName = '';
