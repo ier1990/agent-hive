@@ -10,6 +10,8 @@ AI Root Defender is a local-first, read-only diagnostic shell for Linux and web 
 - preserves session memory and compose artifacts in readable markdown memory files
 - supports editor-driven context composition with `/compose`
 - supports multiple provider profiles through config and `/provider`
+- supports telemetry toggles through `/monitor-mode`
+- supports config-driven telemetry thresholds and optional deeper diagnostics
 
 ## Current Shape
 
@@ -37,6 +39,17 @@ Private live overrides belong in:
 - `/web/private/agent_tools.json`
 
 More detail is documented in [config/blueprint.md](/web/html/admin/AI_Root_Defender/config/blueprint.md:1).
+
+Telemetry and higher-level diagnostics are configured in:
+
+- `telemetry`
+  - master on/off switch for the telemetry contract
+- `telemetry_alerts`
+  - controls whether threshold breaches emit `[ALERT]` lines
+- `telemetry_config`
+  - threshold and trip values such as load-per-core ratio, memory percent, swap percent, and root disk percent
+- `telemetry_diagnostics`
+  - opt-in deeper reporting such as MySQL process visibility, failed services, inode usage, and recent OOM signals
 
 Provider slugs:
 
@@ -114,6 +127,12 @@ python3 agent_bash.py
 - `/help`
 - `/status`
 - `/provider`
+- `/monitor-mode`
+- `/monitor-mode status`
+- `/monitor-mode on`
+- `/monitor-mode off`
+- `/monitor-mode alerts-on`
+- `/monitor-mode alerts-off`
 - `/debug`
 - `/compose`
 - `/compose --bootstrap`
@@ -123,6 +142,48 @@ python3 agent_bash.py
 - `/bh recent`
 - `/bh top`
 - `/contract <json>`
+
+## Monitor Modes
+
+`/monitor-mode` controls the basic telemetry harness state from inside the shell.
+
+- `/monitor-mode status`
+  - shows whether telemetry collection and telemetry alerts are currently on or off
+- `/monitor-mode on`
+  - enables telemetry collection
+- `/monitor-mode off`
+  - disables telemetry collection
+- `/monitor-mode alerts-on`
+  - keeps telemetry running and enables alert output
+- `/monitor-mode alerts-off`
+  - keeps telemetry available but suppresses alert output
+
+This command writes live overrides into `/web/private/agent_tools.json`, so changes persist across restarts without editing the repo default file directly.
+
+## Diagnostic Modes
+
+The telemetry contract at [bash_contracts/telemetry.sh](/web/html/admin/AI_Root_Defender/bash_contracts/telemetry.sh:1) now separates simple threshold alerts from deeper self-diagnostics.
+
+- Threshold alerts
+  - driven by `telemetry_config` in [tools.default.json](/web/html/admin/AI_Root_Defender/config/tools.default.json:1)
+  - currently covers load-per-core ratio, memory usage, swap usage, and root disk usage
+- Deeper diagnostic reporting
+  - driven by `telemetry_diagnostics` in [tools.default.json](/web/html/admin/AI_Root_Defender/config/tools.default.json:1)
+  - currently supports `mysql_process`, `failed_services`, `disk_inodes`, and `oom_events`
+
+This gives you a few useful operating modes:
+
+- quiet suit
+  - `telemetry=true`, `telemetry_alerts=false`
+  - gather extra machine context without shouting
+- loud suit
+  - `telemetry=true`, `telemetry_alerts=true`
+  - emit alerts when thresholds are breached
+- deeper suit
+  - `telemetry=true` plus selected `telemetry_diagnostics.*=true`
+  - expose richer environment feedback for the agent
+
+The intent is to keep the AI in a controlled shell harness while still letting it feel the “pressure” of the host through bounded, auditable reporting surfaces.
 
 ## Task File Shape
 

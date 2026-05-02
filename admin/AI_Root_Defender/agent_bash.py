@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent_config import load_tool_settings, get_active_provider_entry, resolve_provider_by_ref
+from agent_common import EXTERNAL_TOOLS_CONFIG_PATH
 from editor_integration import get_available_editor, open_editor
 from lib.bash_guard import bash_cfg as _bash_cfg
 from lib.bash_guard import build_prompt_context as _build_prompt_context
@@ -234,6 +235,7 @@ def _print_status(
     provider_name: str,
     active_idx: int,
     providers_list: List[Dict[str, Any]],
+    settings: Dict[str, Any],
 ) -> None:
     """Print the /status output with rich system info."""
     cyan = "\033[96m"
@@ -249,6 +251,9 @@ def _print_status(
     _lbl("debug", "on" if debug_enabled else "off", yellow if debug_enabled else green)
     _lbl("turns", f"{turn_count}/{max_turns}")
     _lbl("access", runtime_access)
+    flags = _telemetry_flags(settings)
+    _lbl("monitor", "on" if flags["telemetry"] else "off", green if flags["telemetry"] else yellow)
+    _lbl("monitor alerts", "on" if flags["telemetry_alerts"] else "off", green if flags["telemetry_alerts"] else yellow)
 
     print(f"\n{cyan}── Provider ─────────────────────────────────────────────────{reset}")
     if turn_gen:
@@ -435,6 +440,11 @@ def _show_help() -> None:
     print("Commands:")
     print("  /help                                Show this help")
     print("  /status                              Show current status")
+    print("  /monitor-mode status                 Show monitor and alert state")
+    print("  /monitor-mode on                     Enable telemetry collection")
+    print("  /monitor-mode off                    Disable telemetry collection")
+    print("  /monitor-mode alerts-on              Enable telemetry alerts")
+    print("  /monitor-mode alerts-off             Disable telemetry alerts")
     print("  /provider                            Show active provider/model configuration")
     print("  /provider list                       List all configured providers")
     print("  /provider <idx|label>                Switch active provider (e.g. /provider 1 or /provider big)")
@@ -470,6 +480,58 @@ def _print_provider_banner(turn_gen: Optional[TurnGenerator], provider_name: str
         print(f"Endpoint: {turn_gen.provider_endpoint}")
     status = "online" if turn_gen.is_available else "offline"
     print(f"Provider status: {status}")
+
+
+def _telemetry_flags(settings: Dict[str, Any]) -> Dict[str, bool]:
+    return {
+        "telemetry": bool(settings.get("telemetry", False)),
+        "telemetry_alerts": bool(settings.get("telemetry_alerts", False)),
+    }
+
+
+def _print_monitor_status(settings: Dict[str, Any]) -> None:
+    flags = _telemetry_flags(settings)
+    telemetry_text = "on" if flags["telemetry"] else "off"
+    alerts_text = "on" if flags["telemetry_alerts"] else "off"
+    print(f"monitor-mode: telemetry={telemetry_text}, alerts={alerts_text}")
+
+
+def _update_monitor_mode(
+    settings: Dict[str, Any],
+    command: str,
+    override_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    action = str(command or "").strip().lower()
+    if action not in {"status", "on", "off", "alerts-on", "alerts-off"}:
+        raise ValueError("usage: /monitor-mode <status|on|off|alerts-on|alerts-off>")
+
+    if action == "status":
+        return settings
+
+    updated = dict(settings)
+    if action == "on":
+        updated["telemetry"] = True
+    elif action == "off":
+        updated["telemetry"] = False
+    elif action == "alerts-on":
+        updated["telemetry_alerts"] = True
+    elif action == "alerts-off":
+        updated["telemetry_alerts"] = False
+
+    target = override_path or EXTERNAL_TOOLS_CONFIG_PATH
+    existing = {}
+    if target.exists():
+        try:
+            raw = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                existing = raw
+        except Exception:
+            existing = {}
+    existing["telemetry"] = bool(updated.get("telemetry", False))
+    existing["telemetry_alerts"] = bool(updated.get("telemetry_alerts", False))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(existing, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    return updated
 
 
 def _visual_len(s: str) -> int:
@@ -591,6 +653,12 @@ def _setup_prompt_session() -> Optional[PromptSession]:
     commands = [
         "/help",
         "/status",
+        "/monitor-mode",
+        "/monitor-mode status",
+        "/monitor-mode on",
+        "/monitor-mode off",
+        "/monitor-mode alerts-on",
+        "/monitor-mode alerts-off",
         "/provider",
         "/provider list",
         "/hello",
@@ -1798,7 +1866,20 @@ def run_shell() -> int:
                     provider_name=provider_name,
                     active_idx=active_idx,
                     providers_list=providers_list,
+                    settings=settings,
                 )
+                continue
+            if treat_as_command and (line == "/monitor-mode" or line.startswith("/monitor-mode ")):
+                parts = line.split(maxsplit=1)
+                sub = parts[1].strip() if len(parts) > 1 else "status"
+                try:
+                    settings = _update_monitor_mode(settings, sub)
+                    flags = _telemetry_flags(settings)
+                    cfg["telemetry"] = flags["telemetry"]
+                    cfg["telemetry_alerts"] = flags["telemetry_alerts"]
+                    _print_monitor_status(settings)
+                except Exception as exc:
+                    print(str(exc))
                 continue
             if treat_as_command and (line == "/provider" or line.startswith("/provider ")):
                 parts = line.split(maxsplit=1)

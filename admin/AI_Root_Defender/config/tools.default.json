@@ -83,5 +83,21 @@
   },
   "search": {
     "enabled": false
+  },
+  "telemetry": false,
+  "telemetry_alerts": false,
+  "telemetry_config": {
+    "load_per_core_ratio_warn": 1.0,
+    "memory_pct_warn": 80,
+    "swap_pct_warn": 20,
+    "disk_root_pct_warn": 90
+  },
+  "telemetry_diagnostics": {
+    "system_load": true,
+    "disk_root": true,
+    "mysql_process": false,
+    "failed_services": false,
+    "disk_inodes": false,
+    "oom_events": false
   }
 }

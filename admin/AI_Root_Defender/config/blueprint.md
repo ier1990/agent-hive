@@ -48,6 +48,9 @@ This is the public app baseline.
 - Blocked tokens
 - Prompt-context defaults
 - Memory/search feature toggles
+- Telemetry defaults such as `telemetry` and `telemetry_alerts`
+- Telemetry thresholds under `telemetry_config`
+- Optional deeper diagnostic reporting flags under `telemetry_diagnostics`
 
 This is the public tool and safety policy baseline.
 
