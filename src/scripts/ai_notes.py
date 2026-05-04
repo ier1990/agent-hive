@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 _metadata. now ai_notes.py
-Summary or  metadata pass: human_notes.db -> notes_ai_metadata.db using Ollama.
+Summary or metadata pass for bash-history notes: human_notes.db -> notes_ai_metadata.db using Ollama.
 
 - Incremental: only processes notes that changed (source_hash).
+- Default source is bash-history note rows only, not general Human Notes.
 - Writes strict JSON metadata per note to ai_note_meta table.
 - Writes summary, tags, doc_kind, entities, commands, sensitivity, etc.
 - Configurable via command-line args.
@@ -143,33 +144,49 @@ def job_upsert_finish(conn: sqlite3.Connection, job: str, ok: bool, duration_ms:
     conn.commit()
 
 
-def get_max_note_id(human_db: str) -> int:
+def get_max_note_id(human_db: str, notes_type: str = "", topic: str = "") -> int:
     conn = sqlite3.connect(human_db)
     try:
-        row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM notes;").fetchone()
+        sql = "SELECT COALESCE(MAX(id), 0) FROM notes WHERE 1=1"
+        params: List[Any] = []
+        if notes_type != "":
+            sql += " AND notes_type = ?"
+            params.append(notes_type)
+        if topic != "":
+            sql += " AND COALESCE(topic, '') = ?"
+            params.append(topic)
+        row = conn.execute(sql, tuple(params)).fetchone()
         return int(row[0] or 0)
     finally:
         conn.close()
 
 
-def load_notes(human_db: str, limit: int, since_id: int = 0) -> List[NoteRow]:
+def load_notes(human_db: str, limit: int, since_id: int = 0, notes_type: str = "", topic: str = "") -> List[NoteRow]:
     conn = sqlite3.connect(human_db)
     conn.row_factory = sqlite3.Row
 
     # Important: we fetch newest-first so a small LIMIT still reaches recent notes.
     # We'll reverse before returning so processing stays oldest->newest.
-    rows = conn.execute(
-        """
+    sql = """
         SELECT id, parent_id, notes_type, COALESCE(topic,'') AS topic, note,
                COALESCE(created_at,'') AS created_at,
                COALESCE(updated_at,'') AS updated_at
         FROM notes
         WHERE id > ?
+    """
+    params: List[Any] = [since_id]
+    if notes_type != "":
+        sql += " AND notes_type = ?"
+        params.append(notes_type)
+    if topic != "":
+        sql += " AND COALESCE(topic, '') = ?"
+        params.append(topic)
+    sql += """
         ORDER BY id DESC
         LIMIT ?;
-        """,
-        (since_id, limit),
-    ).fetchall()
+    """
+    params.append(limit)
+    rows = conn.execute(sql, tuple(params)).fetchall()
 
     conn.close()
 
@@ -361,14 +378,16 @@ def main() -> int:
     ap.add_argument("--sleep", type=float, default=0.0, help="sleep between calls (seconds)")
     ap.add_argument("--since-id", type=int, default=0, help="force starting note id")
     ap.add_argument("--backtrack", type=int, default=200, help="scan backwards this many note IDs to catch recent edits")
+    ap.add_argument("--source-notes-type", default="logs", help="only process notes with this notes_type (default: logs)")
+    ap.add_argument("--source-topic", default="bash_history", help="only process notes with this topic (default: bash_history)")
     ap.add_argument("--dry-run", action="store_true", help="do not call Ollama or write ai_db; just report what would be processed")
     args = ap.parse_args()
 
     ai_conn = sqlite3.connect(args.ai_db)
     ensure_ai_schema(ai_conn)
 
-    # Heartbeat goes to the human notes DB.
-    job_name = "ai_notes"
+    # Heartbeat goes to the human notes DB, but this worker only reads bash-history note rows.
+    job_name = "ai_bash_notes"
     hb = sqlite3.connect(args.human_db)
     ensure_job_runs_schema(hb)
     job_upsert_start(hb, job_name)
@@ -377,18 +396,27 @@ def main() -> int:
     last_processed = get_last_processed_note_id(ai_conn)
     backtrack = max(0, int(args.backtrack))
     start_from = args.since_id if args.since_id > 0 else max(0, last_processed - backtrack)
-    max_note_id = get_max_note_id(args.human_db)
+    source_notes_type = str(args.source_notes_type or "").strip()
+    source_topic = str(args.source_topic or "").strip()
+    max_note_id = get_max_note_id(args.human_db, source_notes_type, source_topic)
 
     print(
         "[INFO] scan_config "
         f"human_db={args.human_db} ai_db={args.ai_db} "
         f"max_note_id={max_note_id} last_processed_note_id={last_processed} "
         f"start_from={start_from} limit={args.limit} backtrack={backtrack} dry_run={bool(args.dry_run)} "
+        f"source_notes_type={source_notes_type} source_topic={source_topic} "
         f"ollama_url={args.ollama_url} model={args.model}",
         file=sys.stderr,
     )
 
-    notes = load_notes(args.human_db, limit=args.limit, since_id=start_from)
+    notes = load_notes(
+        args.human_db,
+        limit=args.limit,
+        since_id=start_from,
+        notes_type=source_notes_type,
+        topic=source_topic,
+    )
 
     processed = 0
     skipped = 0

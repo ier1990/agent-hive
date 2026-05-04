@@ -23,6 +23,8 @@ DEFAULTS: Dict[str, str] = {
     "ai.ollama.url": "http://192.168.0.142:11434",
     "ai.ollama.model": "gpt-oss:latest",
     "search.api.base": "http://192.168.0.142/v1/search/?q=",
+    "bash.history.users": "samekhi,root",
+    "bash.history.enable_search": "0",
 }
 
 
@@ -76,6 +78,35 @@ def _load_json(path: str) -> Dict[str, Any]:
         return {}
     except Exception:
         return {}
+
+
+def _load_env_file(path: str) -> Dict[str, str]:
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+    out: Dict[str, str] = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line == "" or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and (
+            (value[0] == '"' and value[-1] == '"')
+            or (value[0] == "'" and value[-1] == "'")
+        ):
+            value = value[1:-1]
+        if key != "":
+            out[key] = value
+    return out
 
 
 def _load_db_settings(db_path: str) -> Dict[str, str]:
@@ -147,6 +178,7 @@ def get_config(
     default_json_path: str | None = None,
 ) -> Dict[str, str]:
     private_root = get_private_root(__file__)
+    env_path = os.path.join(private_root, ".env")
 
     notes_db_path = notes_db_path or os.getenv("NOTES_DB") or os.path.join(private_root, "db/memory/human_notes.db")
     default_json_path = (
@@ -156,6 +188,14 @@ def get_config(
     )
 
     cfg: Dict[str, str] = dict(DEFAULTS)
+
+    env_cfg = _load_env_file(env_path)
+    bash_users = env_cfg.get("BASH_HISTORY_USERS")
+    if isinstance(bash_users, str) and bash_users.strip():
+        cfg["bash.history.users"] = bash_users.strip()
+    bash_search = env_cfg.get("BASH_HISTORY_ENABLE_SEARCH")
+    if isinstance(bash_search, str) and bash_search.strip():
+        cfg["bash.history.enable_search"] = bash_search.strip()
 
     file_cfg = _load_json(default_json_path)
     for k in DEFAULTS.keys():

@@ -155,6 +155,8 @@ $statuses = ['all', 'pending', 'working', 'done', 'error'];
     <div class="nav">
         <a href="/admin/admin_notes.php">Human Notes</a>
         <a href="/admin/admin_Bash_History.php">Bash History</a>
+        <a href="/admin/admin_AI_Bash_Notes.php">AI Bash Notes</a>
+        <a href="/admin/admin_AI_Search_Notes.php">AI Search Notes</a>
         <a href="/admin/admin_API_Search.php">Search Cache / API Search</a>
     </div>
 

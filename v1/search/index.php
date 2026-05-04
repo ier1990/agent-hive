@@ -79,6 +79,15 @@ $query_idx='CREATE INDEX IF NOT EXISTS idx_search_cache_history_key_time
 function respond($code, $payload) { http_response_code($code); echo json_encode($payload, JSON_UNESCAPED_SLASHES); exit; }
 function ok($items, $meta=[])      { respond(200, ['ok'=>true,'meta'=>$meta,'items'=>array_values($items)]); }
 function bad($msg, $extra=[])      { respond(400, ['ok'=>false,'error'=>$msg]+$extra); }
+function search_truthy($value) {
+  $s = strtolower(trim((string)$value));
+  return in_array($s, ['1', 'true', 'yes', 'on'], true);
+}
+function search_decode_json_maybe($raw) {
+  if (!is_string($raw) || trim($raw) === '') return null;
+  $decoded = json_decode($raw, true);
+  return is_array($decoded) ? $decoded : null;
+}
 
 function json_body() {
   $raw = file_get_contents('php://input');
@@ -241,6 +250,7 @@ $body = ($_SERVER['REQUEST_METHOD'] === 'POST') ? json_body() : $_GET;
 // &safesearch=0
 // &theme=simple
 $q          = clean_search_query($body['q'] ?? '');
+$cached_ai_summary = search_truthy($body['cached_ai_summary'] ?? ($body['cached-ai-summary'] ?? '0'));
 $category_general = 1;
 $language   = 'en-US';
 $time_range = '';
@@ -303,6 +313,50 @@ try {
   $stmt->bindValue(':ttl', '-' . (int)$TTL_DAYS . ' days', PDO::PARAM_STR);
   $stmt->execute();
   $row = $stmt->fetch(PDO::FETCH_ASSOC);
+  if ($cached_ai_summary) {
+    $cacheAiStmt = $db->prepare('
+      SELECT id, q, body, top_urls, ai_notes, provider_type, provider_slot, cached_at
+      FROM search_cache_history
+      WHERE q = :q
+        AND ai_notes IS NOT NULL
+        AND TRIM(ai_notes) <> \'\'
+      ORDER BY cached_at DESC, id DESC
+      LIMIT 1
+    ');
+    $cacheAiStmt->bindValue(':q', $q, PDO::PARAM_STR);
+    $cacheAiStmt->execute();
+    $aiRow = $cacheAiStmt->fetch(PDO::FETCH_ASSOC);
+    if (!$aiRow) {
+      respond(200, [
+        'ok' => true,
+        'cached_ai_summary' => true,
+        'q' => $q,
+        'found' => false,
+      ]);
+    }
+
+    $cachedTop = json_decode((string)($aiRow['top_urls'] ?? '[]'), true);
+    if (!is_array($cachedTop)) $cachedTop = [];
+    $aiNotesRaw = (string)($aiRow['ai_notes'] ?? '');
+    $aiNotesJson = search_decode_json_maybe($aiNotesRaw);
+    $bodyJson = json_decode((string)($aiRow['body'] ?? ''), true);
+    $providerMeta = is_array($bodyJson) ? search_cached_meta_from_payload($bodyJson) : [];
+
+    respond(200, [
+      'ok' => true,
+      'cached_ai_summary' => true,
+      'q' => $q,
+      'found' => true,
+      'source' => 'search_cache_history',
+      'search_cache_id' => (int)($aiRow['id'] ?? 0),
+      'cached_at' => (string)($aiRow['cached_at'] ?? ''),
+      'provider' => isset($providerMeta['provider']) ? (string)$providerMeta['provider'] : (string)($aiRow['provider_type'] ?? ''),
+      'provider_slot' => isset($providerMeta['provider_slot']) ? (string)$providerMeta['provider_slot'] : (string)($aiRow['provider_slot'] ?? ''),
+      'top_urls' => $cachedTop,
+      'ai_notes_format' => $aiNotesJson !== null ? 'json' : 'text',
+      'ai_notes' => $aiNotesJson !== null ? $aiNotesJson : $aiNotesRaw,
+    ]);
+  }
   if ($row) {
     $json = json_decode($row['body'], true);
     if (is_array($json)) {

@@ -3,10 +3,7 @@
 
 Default stages (in order):
 1) ingest_bash_history_to_kb.py for each user in --users
-2) classify_bash_commands.py
-3) queue_bash_searches.py
-4) ai_search_summ.py
-5) ai_notes.py
+2) ai_bash_enrich.py
 
 This allows a single cron entry while preserving individual scripts for manual debugging.
 """
@@ -24,6 +21,7 @@ import sys
 import time
 from typing import List, Tuple
 
+from bash_helper import default_users_csv, parse_users_csv, script_path
 from notes_config import get_private_root
 
 PRIVATE_ROOT = get_private_root(__file__)
@@ -118,18 +116,13 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Run the full bash-history processing pipeline")
     ap.add_argument(
         "--users",
-        default="samekhi,root",
-        help="Comma-separated users for ingest stage (default: samekhi,root)",
+        default=default_users_csv(),
+        help="Comma-separated users for ingest stage (default: BASH_HISTORY_USERS from /web/private/.env, else samekhi,root)",
     )
     ap.add_argument(
         "--skip-ai-notes",
         action="store_true",
         help="Skip ai_notes.py stage",
-    )
-    ap.add_argument(
-        "--skip-ai-search-summ",
-        action="store_true",
-        help="Skip ai_search_summ.py stage",
     )
     ap.add_argument(
         "--dry-run",
@@ -144,27 +137,17 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-def _script_path(name: str) -> str:
-    return os.path.join(os.path.dirname(__file__), name)
-
-
 def build_plan(args: argparse.Namespace) -> List[Tuple[str, List[str]]]:
-    users = [u.strip() for u in str(args.users or "").split(",") if u.strip()]
-    if not users:
-        users = ["samekhi", "root"]
+    users = parse_users_csv(str(args.users or ""))
 
     plan: List[Tuple[str, List[str]]] = []
     for u in users:
-        plan.append(("ingest:" + u, [sys.executable, _script_path("ingest_bash_history_to_kb.py"), u]))
+        plan.append(("ingest:" + u, [sys.executable, script_path("ingest_bash_history_to_kb.py"), u]))
 
-    plan.append(("classify", [sys.executable, _script_path("classify_bash_commands.py")]))
-    plan.append(("queue_search", [sys.executable, _script_path("queue_bash_searches.py")]))
-
-    if not args.skip_ai_search_summ:
-        plan.append(("ai_search_summ", [sys.executable, _script_path("ai_search_summ.py")]))
-
-    if not args.skip_ai_notes:
-        plan.append(("ai_notes", [sys.executable, _script_path("ai_notes.py")]))
+    enrich_cmd = [sys.executable, script_path("ai_bash_enrich.py")]
+    if args.skip_ai_notes:
+        enrich_cmd.append("--skip-notes")
+    plan.append(("ai_bash_enrich", enrich_cmd))
 
     return plan
 

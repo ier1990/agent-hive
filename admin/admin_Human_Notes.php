@@ -160,33 +160,52 @@ function human_notes_execute_or_throw(SQLite3 $db, $stmt, $message)
 function human_notes_search_notes(SQLite3 $db, $query, $typeFilter, $limit)
 {
     $limit = max(1, min(250, (int)$limit));
-    $sql = 'SELECT id, topic, notes_type, note, COALESCE(tags_csv, \'\') AS tags_csv, COALESCE(is_archived, 0) AS is_archived, created_at, updated_at
-            FROM notes
-            WHERE (parent_id IS NULL OR parent_id = 0)';
-    if ($typeFilter !== '' && $typeFilter !== 'all') {
-        $sql .= ' AND notes_type = :type_filter';
+    $runSearch = function ($needle) use ($db, $typeFilter, $limit) {
+        $sql = 'SELECT id, topic, notes_type, note, COALESCE(tags_csv, \'\') AS tags_csv, COALESCE(is_archived, 0) AS is_archived, created_at, updated_at
+                FROM notes
+                WHERE (parent_id IS NULL OR parent_id = 0)';
+        if ($typeFilter !== '' && $typeFilter !== 'all') {
+            $sql .= ' AND notes_type = :type_filter';
+        }
+        if ($needle !== '') {
+            $sql .= ' AND (topic LIKE :q OR note LIKE :q OR notes_type LIKE :q OR COALESCE(tags_csv, \'\') LIKE :q)';
+        }
+        $sql .= ' ORDER BY is_archived ASC, updated_at DESC, id DESC LIMIT :lim';
+        $stmt = $db->prepare($sql);
+        if (!$stmt) {
+            return [];
+        }
+        if ($typeFilter !== '' && $typeFilter !== 'all') {
+            $stmt->bindValue(':type_filter', $typeFilter, SQLITE3_TEXT);
+        }
+        if ($needle !== '') {
+            $stmt->bindValue(':q', '%' . $needle . '%', SQLITE3_TEXT);
+        }
+        $stmt->bindValue(':lim', $limit, SQLITE3_INTEGER);
+        $res = $stmt->execute();
+        $rows = [];
+        while ($res && ($row = $res->fetchArray(SQLITE3_ASSOC))) {
+            $rows[] = $row;
+        }
+        return $rows;
+    };
+
+    $rows = $runSearch($query);
+    if (!empty($rows)) {
+        return $rows;
     }
-    if ($query !== '') {
-        $sql .= ' AND (topic LIKE :q OR note LIKE :q OR notes_type LIKE :q OR COALESCE(tags_csv, \'\') LIKE :q)';
+
+    $parts = preg_split('/\s+/', trim((string)$query));
+    if (!is_array($parts) || count($parts) < 2) {
+        return $rows;
     }
-    $sql .= ' ORDER BY is_archived ASC, updated_at DESC, id DESC LIMIT :lim';
-    $stmt = $db->prepare($sql);
-    if (!$stmt) {
-        return [];
+
+    $fallback = trim((string)$parts[0]);
+    if ($fallback === '' || $fallback === (string)$query) {
+        return $rows;
     }
-    if ($typeFilter !== '' && $typeFilter !== 'all') {
-        $stmt->bindValue(':type_filter', $typeFilter, SQLITE3_TEXT);
-    }
-    if ($query !== '') {
-        $stmt->bindValue(':q', '%' . $query . '%', SQLITE3_TEXT);
-    }
-    $stmt->bindValue(':lim', $limit, SQLITE3_INTEGER);
-    $res = $stmt->execute();
-    $rows = [];
-    while ($res && ($row = $res->fetchArray(SQLITE3_ASSOC))) {
-        $rows[] = $row;
-    }
-    return $rows;
+
+    return $runSearch($fallback);
 }
 
 function human_notes_summary(SQLite3 $db)
@@ -376,6 +395,137 @@ function human_notes_ai_draft($mode, $content, array $capability)
     return human_notes_normalize_tags($text);
 }
 
+function human_notes_import_title_from_filename($filename)
+{
+    $base = pathinfo((string)$filename, PATHINFO_FILENAME);
+    $base = str_replace(['_', '-'], ' ', (string)$base);
+    $base = preg_replace('/\s+/', ' ', (string)$base);
+    $base = trim((string)$base);
+    if ($base === '') {
+        return 'Imported note';
+    }
+    return substr($base, 0, 120);
+}
+
+function human_notes_detect_upload_mime($tmpPath)
+{
+    if (!is_string($tmpPath) || $tmpPath === '') {
+        return '';
+    }
+    if (function_exists('finfo_open')) {
+        $finfo = @finfo_open(FILEINFO_MIME_TYPE);
+        if ($finfo) {
+            $mime = @finfo_file($finfo, $tmpPath);
+            @finfo_close($finfo);
+            if (is_string($mime)) {
+                return trim($mime);
+            }
+        }
+    }
+    return '';
+}
+
+function human_notes_is_text_upload($filename, $mime, $content)
+{
+    $ext = strtolower((string)pathinfo((string)$filename, PATHINFO_EXTENSION));
+    $allowedExts = [
+        'txt', 'md', 'markdown', 'log', 'cfg', 'conf', 'ini', 'json', 'csv',
+        'yaml', 'yml', 'xml', 'sql', 'sh', 'bash', 'zsh', 'ps1', 'bat',
+        'php', 'py', 'js', 'ts', 'css', 'html', 'htaccess'
+    ];
+    if (strpos((string)$content, "\0") !== false) {
+        return false;
+    }
+    if ($mime !== '') {
+        if (strpos($mime, 'text/') === 0) {
+            return true;
+        }
+        if (in_array($mime, ['application/json', 'application/xml', 'application/x-sh', 'application/javascript'], true)) {
+            return true;
+        }
+    }
+    return in_array($ext, $allowedExts, true);
+}
+
+function human_notes_import_uploaded_files(SQLite3 $db, array $aiCapability)
+{
+    if (!isset($_FILES['import_files']) || !is_array($_FILES['import_files']['name'])) {
+        throw new RuntimeException('Choose one or more text files to import.');
+    }
+
+    $names = $_FILES['import_files']['name'];
+    $tmpNames = $_FILES['import_files']['tmp_name'];
+    $errors = $_FILES['import_files']['error'];
+    $imported = 0;
+
+    foreach ($names as $i => $name) {
+        $name = trim((string)$name);
+        if ($name === '') {
+            continue;
+        }
+
+        $uploadErr = isset($errors[$i]) ? (int)$errors[$i] : UPLOAD_ERR_NO_FILE;
+        if ($uploadErr !== UPLOAD_ERR_OK) {
+            throw new RuntimeException('Upload failed for "' . $name . '" with error code ' . $uploadErr . '.');
+        }
+
+        $tmpPath = isset($tmpNames[$i]) ? (string)$tmpNames[$i] : '';
+        if ($tmpPath === '' || !is_uploaded_file($tmpPath)) {
+            throw new RuntimeException('Upload temporary file missing for "' . $name . '".');
+        }
+
+        $content = @file_get_contents($tmpPath);
+        if (!is_string($content)) {
+            throw new RuntimeException('Failed reading "' . $name . '".');
+        }
+
+        $content = str_replace("\r\n", "\n", $content);
+        $content = str_replace("\r", "\n", $content);
+        if (trim($content) === '') {
+            throw new RuntimeException('"' . $name . '" is empty.');
+        }
+
+        $mime = human_notes_detect_upload_mime($tmpPath);
+        if (!human_notes_is_text_upload($name, $mime, $content)) {
+            throw new RuntimeException('"' . $name . '" does not look like a supported text file.');
+        }
+
+        $topic = human_notes_import_title_from_filename($name);
+        $tagsCsv = 'import, uploaded';
+        if ($aiCapability['enabled']) {
+            try {
+                $topic = human_notes_ai_draft('title', $content, $aiCapability);
+            } catch (Throwable $e) {
+            }
+            try {
+                $tagsCsv = human_notes_ai_draft('tags', $content, $aiCapability);
+            } catch (Throwable $e) {
+            }
+        }
+        if (trim((string)$topic) === '') {
+            $topic = human_notes_import_title_from_filename($name);
+        }
+        if (trim((string)$tagsCsv) === '') {
+            $tagsCsv = 'import, uploaded';
+        }
+
+        $stmt = $db->prepare('INSERT INTO notes (notes_type, topic, note, parent_id, tags_csv, path, created_at, updated_at) VALUES (:notes_type, :topic, :note, NULL, :tags_csv, :path, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)');
+        $stmt->bindValue(':notes_type', 'files', SQLITE3_TEXT);
+        $stmt->bindValue(':topic', $topic, SQLITE3_TEXT);
+        $stmt->bindValue(':note', $content, SQLITE3_TEXT);
+        $stmt->bindValue(':tags_csv', human_notes_normalize_tags($tagsCsv), SQLITE3_TEXT);
+        $stmt->bindValue(':path', $name, SQLITE3_TEXT);
+        human_notes_execute_or_throw($db, $stmt, 'Failed to import uploaded file');
+        $imported++;
+    }
+
+    if ($imported <= 0) {
+        throw new RuntimeException('No files were imported.');
+    }
+
+    return $imported;
+}
+
 $db = human_notes_open_db();
 $errors = [];
 $success = [];
@@ -409,6 +559,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             if ($action === 'new') {
                 $form = human_notes_default_form();
+                $editId = 0;
                 $success[] = 'Started a fresh note.';
             } elseif ($action === 'save') {
                 if (trim($form['note']) === '') {
@@ -453,6 +604,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $success[] = 'Note deleted.';
                 $form = human_notes_default_form();
                 $editId = 0;
+            } elseif ($action === 'import_files') {
+                $imported = human_notes_import_uploaded_files($db, $aiCapability);
+                $form = human_notes_default_form();
+                $editId = 0;
+                $query = '';
+                $typeFilter = 'all';
+                $success[] = 'Imported ' . number_format($imported) . ' file(s) as notes.';
             } elseif ($action === 'delete_ai_generated') {
                 $db->exec("DELETE FROM notes WHERE notes_type = 'ai_generated'");
                 $deleted = (int)$db->changes();
@@ -479,6 +637,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($action === 'ai_title') {
                 $form['topic'] = human_notes_ai_draft('title', $form['note'], $aiCapability);
                 $success[] = 'Drafted a title from current content using local AI.';
+            } elseif ($action === 'ai_title_tags') {
+                $form['topic'] = human_notes_ai_draft('title', $form['note'], $aiCapability);
+                $form['tags_csv'] = human_notes_ai_draft('tags', $form['note'], $aiCapability);
+                $success[] = 'Drafted a title and tags from current content using local AI.';
             } elseif ($action === 'ai_tags') {
                 $form['tags_csv'] = human_notes_ai_draft('tags', $form['note'], $aiCapability);
                 $success[] = 'Drafted tags from current content using local AI.';
@@ -503,11 +665,21 @@ if ($editId > 0 && (int)$form['id'] === 0) {
 }
 
 $rows = human_notes_search_notes($db, $query, $typeFilter, 200);
+if ((int)$form['id'] === 0 && $editId <= 0 && $query !== '' && !empty($rows)) {
+    $loaded = $rows[0];
+    $form = [
+        'id' => (int)$loaded['id'],
+        'topic' => (string)($loaded['topic'] ?? ''),
+        'tags_csv' => (string)($loaded['tags_csv'] ?? ''),
+        'notes_type' => (string)($loaded['notes_type'] ?? 'human'),
+        'note' => (string)($loaded['note'] ?? ''),
+    ];
+}
 $summary = human_notes_summary($db);
 $types = human_notes_types();
 $aiStatusText = $aiCapability['enabled']
     ? 'AI drafting is local-only via ' . $aiCapability['provider'] . ' at ' . $aiCapability['base_url']
-    : 'AI drafting is disabled unless the configured model endpoint is local-only. This page never calls SearXNG.';
+    : 'AI drafting is disabled unless the configured model endpoint is local-only. Imported files still save with filename-based fallback metadata.';
 ?>
 <!doctype html>
 <html lang="en">
@@ -542,6 +714,7 @@ $aiStatusText = $aiCapability['enabled']
         .stats { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
         .stat { background: rgba(8,16,28,0.7); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; min-width: 130px; }
         .stat strong { display: block; font-size: 20px; }
+        .hero-search { margin-top: 14px; }
         .grid { display: grid; grid-template-columns: minmax(540px, 1.25fr) minmax(380px, 0.95fr); gap: 14px; align-items: start; }
         .card { background: rgba(17,24,39,0.95); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
         .card h2 { margin: 0 0 10px; font-size: 20px; }
@@ -561,8 +734,9 @@ $aiStatusText = $aiCapability['enabled']
         button.danger { background: #3f1d20; }
         button:disabled { opacity: 0.45; cursor: not-allowed; }
         .searchbar { display: grid; grid-template-columns: 1fr 180px auto; gap: 10px; margin-bottom: 12px; }
+        .searchbar .wide { min-width: 0; }
         .note-list { display: grid; gap: 10px; }
-        .note-item { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: rgba(8,16,28,0.65); }
+        .note-item { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: linear-gradient(135deg, rgba(125,211,252,0.12), rgba(52,211,153,0.09)), var(--panel); box-shadow: inset 0 1px 0 rgba(255,255,255,0.03); }
         .note-item.archived { opacity: 0.7; }
         .note-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; align-items: start; }
         .note-title { font-size: 18px; margin: 0; }
@@ -587,13 +761,25 @@ $aiStatusText = $aiCapability['enabled']
         <div class="nav">
             <a href="/admin/admin_notes.php">Human Notes</a>
             <a href="/admin/admin_Bash_History.php">Bash History</a>
+            <a href="/admin/admin_AI_Bash_Notes.php">AI Bash Notes</a>
+            <a href="/admin/admin_AI_Search_Notes.php">AI Search Notes</a>
             <a href="/admin/admin_API_Search.php">Search Cache / API Search</a>
         </div>
     </div>
 
     <div class="hero">
         <h1>Human Notes</h1>
-        <p>This page is for your own notes first: paste raw text, markdown, passwords, rsync commands, scratch drafts, and AI output you want to keep locally in <code><?php echo human_notes_h(human_notes_db_path()); ?></code>. It does not call SearXNG. The AI draft buttons are local-only and stay disabled unless the configured model endpoint is private.</p>
+        <form method="get" action="/admin/admin_notes.php" class="searchbar hero-search">
+            <input class="wide" type="text" name="q" value="<?php echo human_notes_h($query); ?>" placeholder="Search note body, title, tags, or type">
+            <select name="type">
+                <option value="all">All Types</option>
+                <?php foreach ($types as $value => $label): ?>
+                    <option value="<?php echo human_notes_h($value); ?>"<?php echo $typeFilter === $value ? ' selected' : ''; ?>><?php echo human_notes_h($label); ?></option>
+                <?php endforeach; ?>
+            </select>
+            <button class="secondary" type="submit">Search</button>
+        </form>
+        <div class="notice">Search opens the best match directly in the editor. If it is not the one you want, the other matches stay listed beside it. Database: <code><?php echo human_notes_h(human_notes_db_path()); ?></code></div>
             <div class="stats">
                 <div class="stat"><span class="muted">Total Notes</span><strong><?php echo human_notes_h(number_format($summary['total'])); ?></strong></div>
                 <div class="stat"><span class="muted">Active</span><strong><?php echo human_notes_h(number_format($summary['active'])); ?></strong></div>
@@ -614,7 +800,7 @@ $aiStatusText = $aiCapability['enabled']
                 <div class="notice success"><?php echo human_notes_h($msg); ?></div>
             <?php endforeach; ?>
 
-            <form method="post">
+            <form method="post" action="/admin/admin_notes.php">
                 <input type="hidden" name="csrf_token" value="<?php echo human_notes_h(human_notes_csrf_token()); ?>">
                 <input type="hidden" name="note_id" value="<?php echo (int)$form['id']; ?>">
                 <input type="hidden" name="q" value="<?php echo human_notes_h($query); ?>">
@@ -650,9 +836,10 @@ $aiStatusText = $aiCapability['enabled']
                 <div class="actions">
                     <button class="primary" type="submit" name="action" value="save">Save</button>
                     <button class="secondary" type="submit" name="action" value="new">New</button>
-                    <button class="secondary" type="submit" name="action" value="ai_title"<?php echo $aiCapability['enabled'] ? '' : ' disabled'; ?>>AI Create Title From Current Content</button>
-                    <button class="secondary" type="submit" name="action" value="ai_tags"<?php echo $aiCapability['enabled'] ? '' : ' disabled'; ?>>AI Create Tags From Current Content</button>
-                    <button class="warn" type="submit" name="action" value="delete_ai_generated" onclick="return confirm('Delete all ai_generated notes? This only removes generated notes, not your manual notes.');">Delete All AI Generated</button>
+                    <button class="secondary" type="submit" name="action" value="ai_title"<?php echo $aiCapability['enabled'] ? '' : ' disabled'; ?>>AI Create Title</button>
+                    <button class="secondary" type="submit" name="action" value="ai_tags"<?php echo $aiCapability['enabled'] ? '' : ' disabled'; ?>>AI Create Tags</button>
+                    <button class="secondary" type="submit" name="action" value="ai_title_tags"<?php echo $aiCapability['enabled'] ? '' : ' disabled'; ?>>AI Create Title & Tags</button>
+                    <hr><button class="warn" type="submit" name="action" value="delete_ai_generated" onclick="return confirm('Delete all ai_generated notes? This only removes generated notes, not your manual notes.');">Delete All AI Generated</button> 
                     <?php if ((int)$form['id'] > 0): ?>
                         <button class="warn" type="submit" name="action" value="archive">Archive</button>
                         <button class="secondary" type="submit" name="action" value="restore">Restore</button>
@@ -663,16 +850,30 @@ $aiStatusText = $aiCapability['enabled']
         </div>
 
         <div class="card">
-            <h2>Search And Browse</h2>
-            <form method="get" class="searchbar">
-                <input type="text" name="q" value="<?php echo human_notes_h($query); ?>" placeholder="Search note body, title, tags, or type">
+            <h2>Import And Matches</h2>
+            <form method="post" action="/admin/admin_notes.php" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="<?php echo human_notes_h(human_notes_csrf_token()); ?>">
+                <div>
+                    <label for="import_files">Upload text files</label>
+                    <input id="import_files" type="file" name="import_files[]" multiple accept=".txt,.md,.markdown,.log,.cfg,.conf,.ini,.json,.csv,.yaml,.yml,.xml,.sql,.sh,.bash,.zsh,.ps1,.bat,.php,.py,.js,.ts,.css,.html,.htaccess,text/plain,text/markdown,application/json,application/xml">
+                </div>
+                <div class="actions">
+                    <button class="secondary" type="submit" name="action" value="import_files">Import Files As Notes</button>
+                </div>
+            </form>
+            <div class="notice">Uploads are read from PHP temp storage only. The original file is not kept on disk here. When local AI is enabled, imports auto-draft a title and tags from file contents.</div>
+            <form method="get" action="/admin/admin_notes.php" class="searchbar">
+                <input class="wide" type="text" name="q" value="<?php echo human_notes_h($query); ?>" placeholder="Refine current search">
                 <select name="type">
                     <option value="all">All Types</option>
                     <?php foreach ($types as $value => $label): ?>
                         <option value="<?php echo human_notes_h($value); ?>"<?php echo $typeFilter === $value ? ' selected' : ''; ?>><?php echo human_notes_h($label); ?></option>
                     <?php endforeach; ?>
                 </select>
-                <button class="secondary" type="submit">Search</button>
+                <button class="secondary" type="submit">Filter</button>
+            </form>
+            <form method="get" action="/admin/admin_notes.php" class="actions">
+                <button class="secondary" type="submit">Clear Search</button>
             </form>
             <div class="notice">Use this for manual notes only. Bash history lives on <a href="/admin/admin_Bash_History.php">its own page</a>. Search cache stays on <a href="/admin/admin_API_Search.php">the search admin page</a>.</div>
             <div class="note-list">

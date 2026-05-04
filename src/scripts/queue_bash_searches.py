@@ -5,6 +5,7 @@ import urllib.error
 from logging.handlers import RotatingFileHandler
 
 
+from bash_helper import external_search_enabled
 from notes_config import get_config, get_private_root
 
 PRIVATE_ROOT = get_private_root(__file__)
@@ -295,6 +296,10 @@ def probe_search_api(logger: logging.Logger) -> None:
 def main():
     logger = setup_logging()
     started = time.time()
+
+    if not external_search_enabled():
+        logger.info("search_disabled enable_with=BASH_HISTORY_ENABLE_SEARCH=1")
+        return
 
     lock_or_exit(LOCK)
 
