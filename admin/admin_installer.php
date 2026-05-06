@@ -1,6 +1,8 @@
 <?php
 // Admin Installer - Step-by-step setup wizard
 session_start();
+require_once __DIR__ . '/../lib/cron.php';
+require_once __DIR__ . '/../lib/cron_dispatcher.php';
 
 // Step tracker
 $step = isset($_GET['step']) ? (int)$_GET['step'] : 1;
@@ -277,6 +279,26 @@ function setupEnvFile($postData) {
                 $result['error'] = 'Failed to write ' . $envPath . ' (check permissions)';
         }
         
+        return $result;
+}
+
+function installerSeedDefaultCronTasks() {
+        $result = [
+                'attempted' => true,
+                'ok' => false,
+                'imported' => 0,
+                'skipped' => 0,
+                'errors' => [],
+                'defaults_file' => cron_dispatcher_defaults_file_path(),
+        ];
+
+        try {
+                $db = cron_dispatcher_open_db();
+                $result = array_merge($result, cron_dispatcher_import_default_tasks($db));
+        } catch (Throwable $e) {
+                $result['errors'][] = $e->getMessage();
+        }
+
         return $result;
 }
 
@@ -793,6 +815,35 @@ if ($step === 1 && $action === null) {
     <?php } ?>
     
     <?php
+    $cronSeedResult = installerSeedDefaultCronTasks();
+    ?>
+
+    <div class="mb-6 p-4 rounded border <?= !empty($cronSeedResult['ok']) ? 'bg-blue-900 border-blue-500' : 'bg-yellow-900 border-yellow-600' ?>">
+        <div class="font-bold mb-2">⏱️ Default Cron Tasks</div>
+        <?php if (!empty($cronSeedResult['ok'])): ?>
+            <div class="text-sm text-blue-200">
+                ✓ Seeded <?= (int)$cronSeedResult['imported'] ?> default cron task(s) into the dispatcher database.
+                <?php if ((int)$cronSeedResult['skipped'] > 0): ?>
+                    <div class="text-xs text-yellow-200 mt-2">Skipped <?= (int)$cronSeedResult['skipped'] ?> task(s) with incomplete data.</div>
+                <?php endif; ?>
+                <div class="text-xs text-green-300 mt-2">This includes <span class="font-mono">/web/private/scripts/root_dirperm.sh</span> so it will run once root cron starts.</div>
+                <div class="text-xs text-blue-100 mt-2">To change what future servers preload, edit <span class="font-mono"><?= htmlspecialchars((string)$cronSeedResult['defaults_file']) ?></span>.</div>
+            </div>
+        <?php else: ?>
+            <div class="text-sm text-yellow-200">
+                Default cron tasks were not auto-loaded.
+            </div>
+            <?php if (!empty($cronSeedResult['errors'])): ?>
+                <div class="text-xs text-red-300 mt-2">
+                    <?php foreach ($cronSeedResult['errors'] as $err): ?>
+                        <div>• <?= htmlspecialchars((string)$err) ?></div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        <?php endif; ?>
+    </div>
+
+    <?php
     // Try to load story templates automatically
     $templateResult = loadStoryTemplates();
     ?>
@@ -853,7 +904,7 @@ if ($step === 1 && $action === null) {
                     <div class="font-bold text-yellow-400">2. Fix Permissions</div>
                     <div class="text-sm text-gray-400 mt-1">Sets correct ownership and permissions on source files and directories</div>
                     <div class="font-mono bg-gray-900 p-2 rounded mt-2 text-xs text-green-400">
-                        sudo /web/html/src/scripts/root_dirperm.sh
+                        bash /web/html/src/scripts/root_dirperm.sh
                     </div>
                     <div class="text-xs text-gray-500 mt-2">
                         Location: <span class="font-mono">/web/html/src/scripts/root_dirperm.sh</span><br/>
@@ -869,14 +920,14 @@ if ($step === 1 && $action === null) {
             <div class="flex items-start justify-between">
                 <div>
                     <div class="font-bold text-yellow-400">3. Initialize Cron Dispatcher (Manual)</div>
-                    <div class="text-sm text-gray-400 mt-1">Add the cron dispatcher task to the system crontab</div>
+                    <div class="text-sm text-gray-400 mt-1">As ROOT Add the cron dispatcher task to the system crontab</div>
                     <div class="font-mono bg-gray-900 p-2 rounded mt-2 text-xs text-green-400">
-                        sudo crontab -e
+                        crontab -e
                     </div>
                     <div class="text-xs text-gray-500 mt-2">
                         Add this line to <span class="font-mono">/etc/crontab</span>:<br/>
-                        <span class="font-mono">* * * * * www-data /web/private/scripts/cron_dispatcher.php</span><br/>
-                        Or use the <strong>Admin Crontab UI</strong> (<a href="admin_Crontab.php" target="_blank" class="text-blue-400">admin_Crontab.php</a>) for future task scheduling
+                        <span class="font-mono">* * * * * /usr/bin/php /web/private/scripts/cron_dispatcher.php</span><br/>
+                        Default dispatcher tasks are now preloaded automatically. Use the <strong>Admin Crontab UI</strong> (<a href="admin_Crontab.php" target="_blank" class="text-blue-400">admin_Crontab.php</a>) to review or adjust them.
                     </div>
                 </div>
                 <div class="text-3xl">⏰</div>
@@ -888,16 +939,16 @@ if ($step === 1 && $action === null) {
             <div class="flex items-start justify-between">
                 <div>
                     <div class="font-bold text-yellow-400">4. Initialize Bash History Ingestion</div>
-                    <div class="text-sm text-gray-400 mt-1">Set up hourly bash history ingestion using the Admin Crontab UI</div>
+                    <div class="text-sm text-gray-400 mt-1">Hourly bash history ingestion is included in the default cron task set</div>
                     <div class="font-mono bg-gray-900 p-2 rounded mt-2 text-xs text-green-400">
-                        Open <a href="admin_Crontab.php" target="_blank" class="text-blue-400 underline">admin_Crontab.php</a> and add:
+                        Open <a href="admin_Crontab.php" target="_blank" class="text-blue-400 underline">admin_Crontab.php</a> to confirm:
                     </div>
                     <div class="text-xs text-gray-500 mt-2">
-                        Add this <strong>@hourly</strong> cron job via the Web UI:<br/>
+                        This <strong>@hourly</strong> cron job is loaded by default:<br/>
                         <div class="font-mono bg-gray-900 p-2 rounded mt-1">
                             @hourly /web/private/scripts/root_process_bash_history.py
                         </div>
-                        Navigate to <strong>Admin Crontab</strong> → Add one root_ job with @hourly frequency
+                        Navigate to <strong>Admin Crontab</strong> if you want to change the schedule or disable it.
                     </div>
                 </div>
                 <div class="text-3xl">📜</div>

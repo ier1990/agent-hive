@@ -58,11 +58,11 @@ if (!$IS_EMBED) {
             .resizer {
                 width: 5px;
                 cursor: col-resize;
-                background: #e5e7eb;
+                background: #334155;
                 transition: background 0.2s;
             }
             .resizer:hover, .resizer.resizing {
-                background: #3b82f6;
+                background: #60a5fa;
             }
             .iframe-overlay {
                 display: none;

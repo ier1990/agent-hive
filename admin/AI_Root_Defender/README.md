@@ -5,7 +5,12 @@ AI Root Defender is a local-first, read-only diagnostic shell for Linux and web 
 ## What It Does
 
 - runs a deterministic AI turn loop with `continue`, `needs_input`, and `final` states
-- validates every proposed shell command against an allowlist and blocked-token policy
+- validates every proposed shell command through a layered guard:
+  - blocked-token, syntax, and path safety checks first
+  - static allowlist and disallowed-command policy next
+  - exact-match bash history reuse after policy checks pass
+  - prompt context improves as approved command history grows
+- gets more useful over time through command-history reuse and better prompt context
 - records command proposals, approvals, rejections, and executions in `bh/`
 - preserves session memory and compose artifacts in readable markdown memory files
 - supports editor-driven context composition with `/compose`
@@ -70,6 +75,22 @@ Reusable boot-prompt variants now live in:
 - [boot-contracts/apache_bash_boot.md](/web/html/admin/AI_Root_Defender/boot-contracts/apache_bash_boot.md:1)
 
 See [boot-contracts/blueprint.md](/web/html/admin/AI_Root_Defender/boot-contracts/blueprint.md:1).
+
+## Interpreter Concept
+
+The Interpreter concept lives under:
+
+- [Interpreter/plan.md](/web/html/admin/AI_Root_Defender/Interpreter/plan.md:1)
+  - the concrete build spec for a Python-first gatekeeper between AI intent and system action
+- [Interpreter/ideals.md](/web/html/admin/AI_Root_Defender/Interpreter/ideals.md:1)
+  - the longer-term module-system direction for turning one stable Interpreter into a reusable host for specialized AI roles
+
+The intended direction is:
+
+- a small Interpreter core that enforces policy
+- modules selected by settings and boot prompts
+- reusable templates plugged into modules instead of replacing them
+- one AI system that can switch specialized roles without exposing the same capability surface everywhere
 
 ## Quick Start
 

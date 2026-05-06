@@ -264,6 +264,19 @@ function list_cron_candidates(string $rootDir): array
 	return $out;
 }
 
+function cron_candidate_is_entrypoint(array $item, array $tasksByPath): bool
+{
+	$path = (string)($item['path'] ?? '');
+	$hint = trim((string)($item['cron_hint'] ?? ''));
+	$base = basename($path);
+
+	if ($path !== '' && isset($tasksByPath[$path])) return true;
+	if ($hint !== '') return true;
+	if (strpos($base, 'root_') === 0) return true;
+
+	return false;
+}
+
 $privateRoot = defined('PRIVATE_ROOT') ? (string)PRIVATE_ROOT : '/web/private';
 $scriptsRoot = defined('PRIVATE_SCRIPTS') ? (string)PRIVATE_SCRIPTS : (rtrim($privateRoot, "/\\") . '/scripts');
 $items = list_cron_candidates($scriptsRoot);
@@ -271,6 +284,11 @@ $items = list_cron_candidates($scriptsRoot);
 $viewRunAs = (string)($_GET['run_as'] ?? ($_POST['run_as'] ?? 'all'));
 if (!in_array($viewRunAs, ['all', 'root', 'samekhi'], true)) {
 	$viewRunAs = 'all';
+}
+
+$inventoryView = (string)($_GET['inventory'] ?? ($_POST['inventory'] ?? 'entrypoints'));
+if (!in_array($inventoryView, ['entrypoints', 'all'], true)) {
+	$inventoryView = 'entrypoints';
 }
 
 $messages = [];
@@ -281,6 +299,27 @@ try {
 } catch (Throwable $t) {
 	$db = null;
 	$errors[] = 'Failed to open dispatcher DB: ' . $t->getMessage();
+}
+
+if ($db) {
+	try {
+		$countStmt = $db->query('SELECT COUNT(*) FROM cron_tasks');
+		$taskCount = $countStmt ? (int)$countStmt->fetchColumn() : 0;
+		if ($taskCount === 0) {
+			$seedResult = cron_dispatcher_import_default_tasks($db, '', $scriptsRoot);
+			if (!empty($seedResult['ok'])) {
+				if ((int)$seedResult['imported'] > 0) {
+					$messages[] = 'Auto-loaded ' . (int)$seedResult['imported'] . ' default cron task(s) for this install.';
+				}
+			} else {
+				foreach ((array)$seedResult['errors'] as $err) {
+					$errors[] = $err;
+				}
+			}
+		}
+	} catch (Throwable $t) {
+		$errors[] = 'Failed to auto-load default cron tasks: ' . $t->getMessage();
+	}
 }
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
@@ -302,50 +341,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 	}
 	if ($action === 'import_defaults' && $db) {
 		try {
-			$defaultsFile = __DIR__ . '/defaults/cron_tasks_backup.json';
-			if (!is_file($defaultsFile)) {
-				$errors[] = 'Defaults file not found: ' . $defaultsFile;
+			$seedResult = cron_dispatcher_import_default_tasks($db, '', $scriptsRoot);
+			if (!empty($seedResult['ok'])) {
+				$messages[] = 'Imported ' . (int)$seedResult['imported'] . ' task(s) from defaults' . ((int)$seedResult['skipped'] > 0 ? ' (' . (int)$seedResult['skipped'] . ' skipped)' : '');
 			} else {
-				$jsonContent = file_get_contents($defaultsFile);
-				$tasks = json_decode($jsonContent, true);
-				if (!is_array($tasks)) {
-					$errors[] = 'Invalid JSON in defaults file';
-				} else {
-					$imported = 0;
-					$skipped = 0;
-					$ts = time();
-					foreach ($tasks as $task) {
-						$scriptPath = (string)($task['script_path'] ?? '');
-						if (strpos($scriptPath, '/web/private/scripts/') === 0) {
-							$scriptPath = $scriptsRoot . substr($scriptPath, strlen('/web/private/scripts'));
-						}
-						$schedule = (string)($task['schedule'] ?? '');
-						$argsText = (string)($task['args_text'] ?? '');
-						$enabled = (int)($task['enabled'] ?? 0);
-						
-						if ($scriptPath === '' || $schedule === '') {
-							$skipped++;
-							continue;
-						}
-						
-						if (!cron_expr_syntax_valid($schedule)) {
-							$errors[] = 'Invalid schedule for ' . basename($scriptPath) . ': ' . $schedule;
-							$skipped++;
-							continue;
-						}
-						
-						$ins = $db->prepare('INSERT INTO cron_tasks (script_path, schedule, args_text, enabled, created_at, updated_at) VALUES (:p,:s,:a,:e,:c,:u) ON CONFLICT(script_path) DO UPDATE SET schedule=excluded.schedule, args_text=excluded.args_text, enabled=excluded.enabled, updated_at=excluded.updated_at');
-						$ins->execute([
-							':p' => $scriptPath,
-							':s' => $schedule,
-							':a' => $argsText,
-							':e' => $enabled,
-							':c' => $ts,
-							':u' => $ts,
-						]);
-						$imported++;
-					}
-					$messages[] = 'Imported ' . $imported . ' task(s) from defaults' . ($skipped > 0 ? ' (' . $skipped . ' skipped)' : '');
+				foreach ((array)$seedResult['errors'] as $err) {
+					$errors[] = $err;
 				}
 			}
 		} catch (Throwable $t) {
@@ -498,6 +499,23 @@ if ($viewRunAs !== 'all') {
 	}));
 }
 
+$inventoryUniverseCount = count($itemsFiltered);
+
+$entrypointCount = 0;
+foreach ($itemsFiltered as $it) {
+	if (cron_candidate_is_entrypoint($it, $tasksByPath)) {
+		$entrypointCount++;
+	}
+}
+
+if ($inventoryView !== 'all') {
+	$itemsFiltered = array_values(array_filter($itemsFiltered, function ($it) use ($tasksByPath) {
+		return cron_candidate_is_entrypoint($it, $tasksByPath);
+	}));
+}
+
+$hiddenHelperCount = $inventoryUniverseCount - $entrypointCount;
+
 ?><!doctype html>
 <html lang="en">
 <head>
@@ -575,6 +593,11 @@ if ($viewRunAs !== 'all') {
 						<option value="samekhi" <?php echo ($viewRunAs === 'samekhi') ? 'selected' : ''; ?>>samekhi (non-root_*)</option>
 					<?php endif; ?>
 				</select>
+				<label class="small muted">Inventory:</label>
+				<select name="inventory" style="padding:8px; border:1px solid #ccc; border-radius:8px;">
+					<option value="entrypoints" <?php echo ($inventoryView === 'entrypoints') ? 'selected' : ''; ?>>Entrypoints only</option>
+					<option value="all" <?php echo ($inventoryView === 'all') ? 'selected' : ''; ?>>All scripts</option>
+				</select>
 				<button class="btn" type="submit">Apply</button>
 			</form>
 		</div>
@@ -624,7 +647,7 @@ if ($viewRunAs !== 'all') {
 						<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
 						<input type="hidden" name="action" value="import_defaults" />
 						<input type="hidden" name="run_as" value="<?php echo e($viewRunAs); ?>" />
-						<button class="btn" type="submit" style="background:#e3f2fd; border-color:#64b5f6;">📥 Load Defaults</button>
+						<button class="btn" type="submit">📥 Load Defaults</button>
 					</form>
 				<?php endif; ?>
 				<?php if (!empty($tasks)): ?>
@@ -632,7 +655,7 @@ if ($viewRunAs !== 'all') {
 						<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
 						<input type="hidden" name="action" value="export_tasks" />
 						<input type="hidden" name="run_as" value="<?php echo e($viewRunAs); ?>" />
-						<button class="btn" type="submit" style="background:#e8f5e9; border-color:#81c784;">💾 Export to JSON Backup</button>
+						<button class="btn" type="submit">💾 Export to JSON Backup</button>
 					</form>
 				<?php endif; ?>
 			</div>
@@ -682,7 +705,7 @@ if ($viewRunAs !== 'all') {
 										<input type="hidden" name="action" value="delete_task" />
 										<input type="hidden" name="task_id" value="<?php echo e((string)($t['id'] ?? '')); ?>" />
 										<input type="hidden" name="run_as" value="<?php echo e($viewRunAs); ?>" />
-										<button class="btn" type="submit" style="background:#fff4f4;">Delete</button>
+										<button class="btn" type="submit">Delete</button>
 									</form>
 								</div>
 							</td>
@@ -697,6 +720,12 @@ if ($viewRunAs !== 'all') {
 		<div class="small muted">
 			Tip: add a schedule hint near the top of a script like <code># CRON: */15 * * * *</code> (or <code>// CRON: @hourly</code>) and it will be used for the suggested entry.
 		</div>
+		<div class="small muted" style="margin-top:6px;">
+			Default view shows cron entrypoints only: scripts already scheduled, scripts with a <code>CRON:</code> hint, and <code>root_*</code> wrappers. Switch Inventory to <code>All scripts</code> to expose helper/internal scripts.
+		</div>
+		<?php if ($inventoryView !== 'all' && $hiddenHelperCount > 0): ?>
+			<div class="small muted" style="margin-top:6px;">Hidden helper/internal scripts: <?php echo e((string)$hiddenHelperCount); ?></div>
+		<?php endif; ?>
 
 		<?php if (!is_dir($scriptsRoot)): ?>
 			<p class="bad">Missing scripts directory: <code><?php echo e($scriptsRoot); ?></code></p>

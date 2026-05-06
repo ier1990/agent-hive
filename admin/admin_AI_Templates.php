@@ -849,7 +849,18 @@ if ($action === 'class') {
     .md h1, .md h2, .md h3 { margin: 16px 0 8px; }
     .md p { margin: 10px 0; }
   </style>
-  <link rel="stylesheet" href="lib/admin_dark.css" />
+  <style>
+    .btn.danger {
+      background: rgba(220, 38, 38, 0.14) !important;
+      border-color: rgba(248, 113, 113, 0.35) !important;
+      color: #fecaca !important;
+    }
+    .btn.danger:hover {
+      background: rgba(220, 38, 38, 0.22) !important;
+      color: #fee2e2 !important;
+    }
+  </style>
+  <link rel="stylesheet" href="lib/admin_dark.css?v=<?php echo @filemtime(__DIR__ . '/lib/admin_dark.css') ?: time(); ?>" />
 </head>
 <body>
   <div class="top">

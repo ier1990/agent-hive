@@ -264,6 +264,27 @@ function script_wrapper_path($rel, $wrapperDir) {
   return rtrim((string)$wrapperDir, '/') . '/' . $rel;
 }
 
+function scripts_default_cron_tasks_path() {
+  $preferred = __DIR__ . '/cron_tasks_backup.json';
+  if (is_file($preferred)) return $preferred;
+  return __DIR__ . '/defaults/cron_tasks_backup.json';
+}
+
+function scripts_load_default_cron_tasks() {
+  $path = scripts_default_cron_tasks_path();
+  if (!is_file($path)) {
+    return ['path' => $path, 'tasks' => [], 'error' => 'Default cron task file not found.'];
+  }
+
+  $raw = @file_get_contents($path);
+  $data = json_decode((string)$raw, true);
+  if (!is_array($data)) {
+    return ['path' => $path, 'tasks' => [], 'error' => 'Default cron task JSON is invalid.'];
+  }
+
+  return ['path' => $path, 'tasks' => $data, 'error' => ''];
+}
+
 // Settings source of truth: CodeWalker settings DB.
 $cw = function_exists('codewalker_llm_settings') ? codewalker_llm_settings() : [];
 
@@ -301,6 +322,8 @@ $AI_TIMEOUT = (int)($ai_settings['timeout_seconds'] ?? 120);
 if ($AI_TIMEOUT < 1) $AI_TIMEOUT = 120;
 
 $ALLOW_AI = ($PROVIDER !== 'openai') || ($OPENAI_API_KEY !== '');
+
+$defaultCronInfo = scripts_load_default_cron_tasks();
 
 $GLOBALS['AI_BASE_URL'] = $AI_BASE_URL;
 $GLOBALS['OPENAI_API_KEY'] = $OPENAI_API_KEY;
@@ -826,8 +849,19 @@ $fl = flashes();
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scripts Knowledge Base</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <style>.scroll-thin::-webkit-scrollbar{width:6px;} .scroll-thin::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px;}</style>
-  <link rel="stylesheet" href="lib/admin_dark.css">
+  <style>
+    .scroll-thin::-webkit-scrollbar{width:6px;}
+    .scroll-thin::-webkit-scrollbar-thumb{background:#475569;border-radius:3px;}
+    .scripts-tree a { color: #dbeafe; }
+    .scripts-tree a:hover { background: #1e293b !important; color: #eff6ff !important; }
+    .scripts-tree a.bg-indigo-600 { background: #1d4ed8 !important; color: #eff6ff !important; }
+    .scripts-tree .text-green-600 { color: #86efac !important; }
+    #helpIframeWrapper,
+    #helpIframe {
+      background: #020617 !important;
+    }
+  </style>
+  <link rel="stylesheet" href="lib/admin_dark.css?v=<?php echo @filemtime(__DIR__ . '/lib/admin_dark.css') ?: time(); ?>">
 </head>
 <body class="bg-gray-50 min-h-screen">
   <div class="bg-gradient-to-r from-sky-500 to-indigo-600 text-white py-5 mb-6">
@@ -871,9 +905,51 @@ $fl = flashes();
       <?php endif; ?>
       • Source scripts are read from <span class="font-mono"><?php echo h($Script_Source_Directory); ?></span>
     </div>
+    <div class="mb-6 bg-sky-50 border border-sky-200 rounded-lg shadow-sm p-4">
+      <div class="text-sm font-semibold text-sky-900 mb-2">New Server Setup</div>
+      <div class="text-sm text-slate-700 mb-3">
+        Default cron jobs for new installs are loaded from
+        <span class="font-mono text-xs"><?php echo h((string)$defaultCronInfo['path']); ?></span>.
+        Edit that file when you want future servers to preload jobs like
+        <span class="font-mono text-xs">root_dirperm.sh</span>,
+        <span class="font-mono text-xs">root_process_bash_history.py</span>, or
+        <span class="font-mono text-xs">codewalker_cli.php</span>.
+      </div>
+      <div class="text-xs text-slate-600 mb-3">
+        First-run order: <span class="font-mono">bash /web/html/src/scripts/root_update_scripts.sh</span>,
+        then <span class="font-mono">bash /web/html/src/scripts/root_dirperm.sh</span>,
+        then add the root cron dispatcher entry, then review the preloaded schedules in
+        <a href="admin_Crontab.php" class="text-sky-700 underline">Admin Crontab</a>.
+      </div>
+      <?php if (!empty($defaultCronInfo['error'])): ?>
+        <div class="text-xs text-red-700"><?php echo h((string)$defaultCronInfo['error']); ?></div>
+      <?php else: ?>
+        <div class="text-xs text-slate-600 mb-1">Current default scheduled jobs:</div>
+        <ul class="list-disc ml-5 text-xs text-slate-700 space-y-1">
+          <?php foreach ($defaultCronInfo['tasks'] as $task): ?>
+            <?php
+              $scriptPath = (string)($task['script_path'] ?? '');
+              $schedule = (string)($task['schedule'] ?? '');
+              $argsText = trim((string)($task['args_text'] ?? ''));
+              $enabled = (int)($task['enabled'] ?? 0);
+            ?>
+            <li>
+              <span class="font-mono"><?php echo h($schedule); ?></span>
+              <span class="font-mono"><?php echo h($scriptPath); ?></span>
+              <?php if ($argsText !== ''): ?>
+                <span class="font-mono"><?php echo h($argsText); ?></span>
+              <?php endif; ?>
+              <?php if (!$enabled): ?>
+                <span class="text-amber-700">(disabled by default)</span>
+              <?php endif; ?>
+            </li>
+          <?php endforeach; ?>
+        </ul>
+      <?php endif; ?>
+    </div>
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       <!-- Tree -->
-      <div class="lg:col-span-4 xl:col-span-3 bg-white rounded-lg shadow p-4 flex flex-col max-h-[70vh] overflow-y-auto scroll-thin">
+      <div class="scripts-tree lg:col-span-4 xl:col-span-3 bg-white rounded-lg shadow p-4 flex flex-col max-h-[70vh] overflow-y-auto scroll-thin">
   <h2 class="text-sm font-semibold text-gray-600 mb-2">Scripts</h2>
         <?php if(empty($eps)): ?>
           <p class="text-xs text-gray-500">No scripts indexed yet. Run Sync.</p>

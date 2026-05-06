@@ -193,7 +193,24 @@ $presets = [
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI Providers</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="lib/admin_dark.css">
+  <style>
+    .provider-row { background: #111827; }
+    .provider-row:hover { background: #1e293b !important; }
+    .provider-row.active { background: rgba(22, 163, 74, 0.16) !important; }
+    .provider-row .provider-copy,
+    .provider-row .provider-edit { color: #dbeafe !important; }
+    .provider-row .provider-delete {
+      background: rgba(220, 38, 38, 0.14) !important;
+      border-color: rgba(248, 113, 113, 0.35) !important;
+      color: #fecaca !important;
+    }
+    #deleteModal .modal-card,
+    #deleteModal .modal-muted {
+      background: #111827 !important;
+      color: #e5eefb !important;
+    }
+  </style>
+  <link rel="stylesheet" href="lib/admin_dark.css?v=<?php echo @filemtime(__DIR__ . '/lib/admin_dark.css') ?: time(); ?>">
 </head>
 <body class="bg-gray-50 min-h-screen">
 
@@ -626,7 +643,7 @@ $presets = [
           <?php $isActive = ($conn['hash'] ?? '') === $activeHash; ?>
           <?php $profileHash = (string)($conn['hash'] ?? ''); ?>
           <?php $profileId = ($profileHash !== '') ? substr($profileHash, 0, 12) : ''; ?>
-          <div class="px-5 py-4 hover:bg-gray-50 transition-colors <?php echo $isActive ? 'bg-green-50' : ''; ?>">
+          <div class="provider-row px-5 py-4 hover:bg-gray-50 transition-colors <?php echo $isActive ? 'active bg-green-50' : ''; ?>">
             <div class="flex items-center justify-between gap-4">
               <div class="flex items-start gap-3 flex-1 min-w-0">
                 <div class="mt-1">
@@ -643,7 +660,7 @@ $presets = [
                     ID:
                     <?php if ($profileId !== ''): ?>
                       <span class="font-mono text-[11px]" title="<?php echo h($profileHash); ?>"><?php echo h($profileId); ?></span>
-                      <button type="button" class="ml-2 text-[11px] text-gray-600 hover:text-gray-900" onclick="try{navigator.clipboard.writeText(<?php echo json_encode($profileHash); ?>);}catch(e){}">Copy</button>
+                      <button type="button" class="provider-copy ml-2 text-[11px] text-gray-600 hover:text-gray-900" onclick="try{navigator.clipboard.writeText(<?php echo json_encode($profileHash); ?>);}catch(e){}">Copy</button>
                     <?php else: ?>
                       <span class="text-gray-400">—</span>
                     <?php endif; ?>
@@ -675,7 +692,7 @@ $presets = [
                   <button 
                     type="button"
                     onclick="confirmDelete('<?php echo h(addslashes($conn['name'] ?? '')); ?>', '<?php echo h($conn['hash'] ?? ''); ?>')"
-                    class="px-3 py-1.5 border border-red-300 hover:bg-red-50 text-red-700 rounded text-xs font-medium"
+                    class="provider-delete px-3 py-1.5 border border-red-300 hover:bg-red-50 text-red-700 rounded text-xs font-medium"
                     title="Delete this connection"
                   >
                     Delete
@@ -687,7 +704,7 @@ $presets = [
                 
                 <a 
                   href="?edit=<?php echo h($conn['hash'] ?? ''); ?>" 
-                  class="px-3 py-1.5 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded text-xs font-medium"
+                  class="provider-edit px-3 py-1.5 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded text-xs font-medium"
                   title="Edit this connection"
                 >
                   Edit
@@ -704,7 +721,7 @@ $presets = [
 
 <!-- Delete Confirmation Modal -->
 <div id="deleteModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50" style="display: none;">
-  <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+  <div class="modal-card bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
     <div class="p-6">
       <div class="flex items-center gap-3 mb-4">
         <div class="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
@@ -718,7 +735,7 @@ $presets = [
         </div>
       </div>
       
-      <div class="bg-gray-50 rounded p-3 mb-4">
+      <div class="modal-muted bg-gray-50 rounded p-3 mb-4">
         <div class="text-sm text-gray-700">
           <strong id="deleteConnectionName"></strong>
         </div>

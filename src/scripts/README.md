@@ -44,8 +44,10 @@ Optional or maintenance-only:
   optional script that writes bash history into `human_notes.db` as threaded `logs` notes
 - `classify_bash_commands.py` and `ai_notes.py`:
   older standalone AI stages kept for compatibility and manual debugging
-- `queue_bash_searches.py` and `ai_search_summ.py`:
-  older search-related scripts that are no longer part of the default bash-history flow
+- `queue_bash_searches.py`:
+  older search-related helper kept for manual or legacy workflows
+- `ai_search_summ.py`:
+  legacy search-summary helper for `search_cache.db` and `ai_search_notes.db`; not part of the current default bash-history or notes pipeline and should not be enabled by default on new installs
 
 ### Bash history users
 

@@ -299,7 +299,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 		<form method="post" action="" style="margin-top:10px;" onsubmit="return confirm('RESET Super Admin auth? This will log you out and wipe auth DB.');">
 			<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
 			<input type="hidden" name="action" value="reset_super_admin" />
-			<button class="btn" type="submit" style="background:#fff4f4;">Reset Super Admin (wipe auth)</button>
+			<button class="btn" type="submit">Reset Super Admin (wipe auth)</button>
 		</form>
 	</div>
 
@@ -326,7 +326,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 				</div>
 			</div>
 			<div style="margin-top:10px;">
-				<button class="btn" type="submit" style="background:#fffbe6;">Change Password</button>
+				<button class="btn" type="submit">Change Password</button>
 			</div>
 		</form>
 	</div>
@@ -466,7 +466,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 										<input type="hidden" name="csrf_token" value="<?php echo e(csrf_token()); ?>" />
 										<input type="hidden" name="action" value="delete_device" />
 										<input type="hidden" name="device_id" value="<?php echo e((string)($d['device_id'] ?? '')); ?>" />
-										<button class="btn" type="submit" style="background:#fff4f4; padding:6px 10px;">Delete</button>
+										<button class="btn" type="submit" style="padding:6px 10px;">Delete</button>
 									</form>
 								</td>
 							</tr>

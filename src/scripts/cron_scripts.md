@@ -24,12 +24,10 @@ Primary cron target:
 It runs these scripts in order:
 1) `/web/private/scripts/ingest_bash_history_to_kb.py samekhi`
 2) `/web/private/scripts/ingest_bash_history_to_kb.py root`
-3) `/web/private/scripts/classify_bash_commands.py`
-4) `/web/private/scripts/queue_bash_searches.py`
-5) `/web/private/scripts/ai_search_summ.py`
-6) `/web/private/scripts/ai_notes.py`
+3) `/web/private/scripts/ai_bash_enrich.py`
 
-All individual scripts remain callable for manual debugging.
+Older search-summary scripts like `queue_bash_searches.py` and `ai_search_summ.py` are not part of the current default pipeline.
+All individual scripts remain callable for manual debugging or legacy workflows.
 
 ## Example cron / dispatcher setup
 

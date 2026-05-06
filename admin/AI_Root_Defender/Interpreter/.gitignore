@@ -1,0 +1,14 @@
+# Keep the canonical Interpreter docs in git, but ignore local scratch work.
+
+*.tmp
+*.bak
+*.swp
+*.swo
+*.local.md
+*.draft.md
+
+notes/
+drafts/
+tmp/
+exports/
+generated/
